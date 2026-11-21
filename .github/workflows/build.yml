@@ -304,7 +304,9 @@ jobs:
       - name: Report Linux executable link time
         if: steps.build.outcome == 'success'
         run: |
-          awk -F '\t' '$4 == "Release/SleepyGram" { print "SleepyGram link: " ($2 - $1) / 1000 " s" }' out/.ninja_log
+          if [[ -f out/.ninja_log ]]; then
+            awk -F '\t' '$4 == "Release/SleepyGram" { print "SleepyGram link: " ($2 - $1) / 1000 " s" }' out/.ninja_log
+          fi
 
       - name: Save Linux compiler cache
         if: env.FAST_CI == 'true' && github.event_name != 'pull_request' && steps.compiler-cache.outputs.cache-hit != 'true'

@@ -11,6 +11,7 @@ import sys
 
 PLATFORMS = {"linux-x64", "macos-arm64", "windows-x64"}
 SOURCE_PLATFORMS = {"linux": "linux-x64", "mac": "macos-arm64", "win": "windows-x64"}
+HEADER_SUFFIXES = (".h", ".hh", ".hpp", ".hxx", ".inc", ".inl", ".ipp", ".tpp")
 MANUAL = {"all": PLATFORMS, "linux-macos": {"linux-x64", "macos-arm64"},
           "macos-windows": {"macos-arm64", "windows-x64"}}
 
@@ -18,8 +19,7 @@ MANUAL = {"all": PLATFORMS, "linux-macos": {"linux-x64", "macos-arm64"},
 def for_paths(paths):
     selected = set()
     for path in paths:
-        if PurePosixPath(path).name == "CMakeLists.txt" or path.endswith(
-                (".cmake", ".h", ".hh", ".hpp", ".hxx", ".inc", ".inl", ".ipp", ".tpp")):
+        if PurePosixPath(path).name == "CMakeLists.txt" or path.endswith(".cmake"):
             return PLATFORMS.copy()
         if path == "docs/building-win.md":
             selected.add("windows-x64")
@@ -32,9 +32,12 @@ def for_paths(paths):
         elif path.startswith("Telegram/Resources/winrc/"):
             selected.add("windows-x64")
         elif path.startswith("Telegram/SourceFiles/"):
-            parts = PurePosixPath(path).parts
-            if len(parts) > 4 and parts[2] == "platform" and parts[3] in SOURCE_PLATFORMS:
-                selected.add(SOURCE_PLATFORMS[parts[3]])
+            platform = next((name for folder, name in SOURCE_PLATFORMS.items()
+                             if f"/platform/{folder}/" in path), None)
+            if platform:
+                selected.add(platform)
+            elif path.endswith(HEADER_SUFFIXES):
+                return PLATFORMS.copy()
             elif path.endswith(("_mac.mm", "_osx.m")):
                 selected.add("macos-arm64")
             elif path.endswith("_win.cpp"):

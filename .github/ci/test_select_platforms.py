@@ -19,9 +19,13 @@ class PlatformSelectionTest(unittest.TestCase):
                                     "Telegram/SourceFiles/main/main_account.cpp"]),
                          {"macos-arm64", "linux-x64"})
         self.assertEqual(for_paths(["Telegram/SourceFiles/platform/linux/tray_linux.cpp"]), {"linux-x64"})
+        self.assertEqual(for_paths(["Telegram/SourceFiles/platform/win/tray_win.h"]), {"windows-x64"})
+        self.assertEqual(for_paths(["Telegram/SourceFiles/ayu/features/streamer_mode/platform/mac/streamer_mode_mac.mm"]),
+                         {"macos-arm64"})
 
     def test_headers_build_and_dependency_changes(self):
         for path in ("Telegram/SourceFiles/main/main_account.h",
+                     "Telegram/SourceFiles/platform/platform_tray.h",
                      "Telegram/SourceFiles/platform/win/CMakeLists.txt", "cmake", ".gitmodules",
                      "Telegram/lib_base", "Telegram/build/docker/centos_env/build.sh",
                      ".github/workflows/build.yml", "Telegram/ThirdParty/widget-sandbox"):
