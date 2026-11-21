@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QDir>
 #include <QtCore/QDate>
+#include <QtCore/QFileInfo>
 
 namespace Export {
 namespace Output {
@@ -21,13 +22,13 @@ QString NormalizePath(const Settings &settings) {
 	QDir folder(settings.path);
 	const auto path = folder.absolutePath();
 	auto result = path.endsWith('/') ? path : (path + '/');
-	if (settings.incremental && settings.incrementalState) {
-		return result;
-	}
 	if (!folder.exists() && !settings.forceSubPath) {
 		return result;
 	}
-	const auto mode = QDir::AllEntries | QDir::NoDotAndDotDot;
+	const auto mode = QDir::AllEntries
+		| QDir::Hidden
+		| QDir::System
+		| QDir::NoDotAndDotDot;
 	const auto list = folder.entryInfoList(mode);
 	if (list.isEmpty() && !settings.forceSubPath) {
 		return result;
@@ -41,7 +42,11 @@ QString NormalizePath(const Settings &settings) {
 		return base + (i ? " (" + QString::number(i) + ')' : QString());
 	};
 	auto index = 0;
-	while (QDir(result + add(index)).exists()) {
+	while (true) {
+		const auto entry = QFileInfo(result + add(index));
+		if (!entry.exists() && !entry.isSymLink()) {
+			break;
+		}
 		++index;
 	}
 	result += add(index) + '/';

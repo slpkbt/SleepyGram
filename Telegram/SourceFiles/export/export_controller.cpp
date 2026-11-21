@@ -69,7 +69,7 @@ private:
 	void setState(State &&state);
 	void ioError(const QString &path);
 	bool ioCatchError(Output::Result result);
-	void saveIncrementalStateIfNeeded();
+	[[nodiscard]] bool saveIncrementalStateIfNeeded();
 	void setFinishedState();
 
 	//void requestPasswordState();
@@ -299,6 +299,11 @@ void ControllerObject::startExport(
 	if (!_settings.path.isEmpty()) {
 		return;
 	}
+	// Do not let a stale or scripted request truncate an existing export.
+	if (settings.incremental) {
+		ioError(settings.path);
+		return;
+	}
 	_settings = NormalizeSettings(settings);
 	_environment = environment;
 	_settings.singleTopicRootId = _topicRootId;
@@ -411,8 +416,9 @@ void ControllerObject::exportNext() {
 			return;
 		}
 		_api.finishExport([=] {
-			saveIncrementalStateIfNeeded();
-			setFinishedState();
+			if (!stopped() && saveIncrementalStateIfNeeded()) {
+				setFinishedState();
+			}
 		});
 		return;
 	}
@@ -824,8 +830,9 @@ void ControllerObject::exportTopic() {
 				return;
 			}
 			_api.finishExport([=] {
-				saveIncrementalStateIfNeeded();
-				setFinishedState();
+				if (!stopped() && saveIncrementalStateIfNeeded()) {
+					setFinishedState();
+				}
 			});
 		});
 }
@@ -849,9 +856,9 @@ ProcessingState ControllerObject::stateTopic(
 	});
 }
 
-void ControllerObject::saveIncrementalStateIfNeeded() {
+bool ControllerObject::saveIncrementalStateIfNeeded() {
 	if (!_settings.onlySinglePeer() || !_settings.incrementalState) {
-		return;
+		return true;
 	}
 	auto &st = *_settings.incrementalState;
 	st.mode = _settings.onlySingleTopic()
@@ -865,9 +872,13 @@ void ControllerObject::saveIncrementalStateIfNeeded() {
 		st.peerId = dialog->peerId.value;
 	}
 	_api.collectIncrementalState(st);
-	if (st.lastMessageId > 0 && st.peerId != 0) {
-		SaveIncrementalState(_settings.path, st);
+	if (st.lastMessageId > 0
+		&& st.peerId != 0
+		&& !SaveIncrementalState(_settings.path, st)) {
+		ioError(IncrementalStateFilePath(_settings.path));
+		return false;
 	}
+	return true;
 }
 
 void ControllerObject::setFinishedState() {

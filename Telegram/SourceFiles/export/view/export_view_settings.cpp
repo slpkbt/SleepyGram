@@ -276,69 +276,15 @@ void SettingsWidget::setupPathAndFormat(
 		not_null<Ui::VerticalLayout*> container) {
 	if (_singlePeerId != 0) {
 		addFormatAndLocationLabel(container);
-		const auto incrementalWrap = container->add(
-			object_ptr<Ui::SlideWrap<Ui::Checkbox>>(
+		// In-place resume is paused until the archive and its state can
+		// be committed together without risking the previous export.
+		container->add(
+			object_ptr<Ui::FlatLabel>(
 				container,
-				object_ptr<Ui::Checkbox>(
-					container,
-					tr::lng_export_option_incremental(tr::now),
-					false,
-					st::defaultBoxCheckbox),
-				st::exportSettingPadding));
-		incrementalWrap->toggle(false, anim::type::instant);
-		const auto detected = incrementalWrap->lifetime().make_state<
-			std::shared_ptr<IncrementalState>>();
-		const auto refreshDetected = [=](const QString &path) {
-			auto loaded = LoadIncrementalState(path);
-			const auto matches = loaded
-				&& MatchesIncrementalTarget(
-					*loaded,
-					_session->userId().bare,
-					_singlePeerId.value,
-					readData().singleTopicRootId);
-			if (matches) {
-				*detected = std::make_shared<IncrementalState>(
-					std::move(*loaded));
-				incrementalWrap->toggle(true, anim::type::normal);
-				incrementalWrap->entity()->setChecked(true);
-				changeData([&](Settings &data) {
-					data.incremental = true;
-					data.incrementalState = *detected;
-					data.format = Format((*detected)->format);
-					data.singlePeerFrom = 0;
-				});
-			} else {
-				*detected = nullptr;
-				incrementalWrap->entity()->setChecked(false);
-				incrementalWrap->toggle(false, anim::type::normal);
-				if (readData().incremental || readData().incrementalState) {
-					changeData([&](Settings &data) {
-						data.incremental = false;
-						data.incrementalState = nullptr;
-					});
-				}
-			}
-		};
-		incrementalWrap->entity()->checkedChanges(
-		) | rpl::on_next([=](bool checked) {
-			changeData([&](Settings &data) {
-				if (checked && *detected) {
-					data.incremental = true;
-					data.incrementalState = *detected;
-					data.format = Format((*detected)->format);
-					data.singlePeerFrom = 0;
-				} else {
-					data.incremental = false;
-					data.incrementalState = nullptr;
-				}
-			});
-		}, incrementalWrap->lifetime());
-		value() | rpl::map([](const Settings &data) {
-			return data.path;
-		}) | rpl::distinct_until_changed(
-		) | rpl::on_next([=](const QString &path) {
-			refreshDetected(path);
-		}, incrementalWrap->lifetime());
+				rpl::single(u"Updating an existing export is temporarily disabled "
+					"to protect your saved history. Create a new export instead."_q),
+				st::exportLocationLabel),
+			st::exportLocationPadding);
 		addLimitsLabel(container);
 		return;
 	}
