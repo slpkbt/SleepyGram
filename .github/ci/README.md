@@ -27,3 +27,26 @@ Each platform prepares an unsigned TDUP from the files in its manual archive.
 Release publishing requires a manual dispatch with all three platforms on
 protected `dev` and approval in the release environment. See the
 [stable release and key setup guide](../../docs/signed-updates.md).
+
+## Build modes
+
+Pushes to `dev` and PRs targeting `dev` always run source preflight. Shared
+client source changes build Linux. Platform-specific source changes also
+select their platform. Shared headers, build configuration, submodules, and
+CI changes select all three platforms. Documentation-only changes skip the
+platform jobs. The Windows SDK version in `docs/building-win.md` selects Windows.
+
+Manual runs build and upload the selected packages by default. Select `all`
+with `publish_release=false` to also verify that the three packages and
+unsigned updates came from this run. Select `ci_only=true` to run the platform
+checks without uploading successful packages. Fast CI stops Ninja at the
+first failure and accepts `build_jobs` values of 2, 3, or 4.
+
+Linux fast CI mounts a 1,500 MB ccache in the build container and uses the
+public API defaults. The build step reports compiler hits and misses, cache
+footprint, and executable link time. PRs restore existing caches. Pushes to
+`dev` and manual fast runs can prime a weekly compiler cache scoped to their
+ref. Manual package builds and stable releases use the original precompiled
+header and never restore the compiler cache. The dependency caches are saved
+on `dev`; macOS restores or builds its dependencies in the same job as the
+client. The macOS cache is saved after the existing build-intermediate cleanup.

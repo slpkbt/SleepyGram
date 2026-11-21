@@ -4,6 +4,7 @@
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import subprocess
 import sys
 
@@ -46,7 +47,7 @@ def for_paths(paths):
 
 
 def git_diff(base):
-    if not base or base == "0" * 40:
+    if not base or not re.fullmatch(r"[0-9a-f]{40}", base) or base == "0" * 40:
         return None
     if subprocess.run(["git", "cat-file", "-e", f"{base}^{{commit}}"],
                       stderr=subprocess.DEVNULL).returncode:

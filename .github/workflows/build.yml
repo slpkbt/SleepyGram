@@ -55,8 +55,8 @@ permissions:
   contents: read
 
 env:
-  TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID || secrets.AYUGRAM_API_ID || secrets.TELEGRAM_API_ID || secrets.API_ID || '2040' }}
-  TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH || secrets.AYUGRAM_API_HASH || secrets.TELEGRAM_API_HASH || secrets.API_HASH || 'b18441a1ff607e10a989891a5462e627' }}
+  TDESKTOP_API_ID: ${{ github.event_name == 'workflow_dispatch' && !inputs.ci_only && (secrets.TDESKTOP_API_ID || secrets.AYUGRAM_API_ID || secrets.TELEGRAM_API_ID || secrets.API_ID) || '2040' }}
+  TDESKTOP_API_HASH: ${{ github.event_name == 'workflow_dispatch' && !inputs.ci_only && (secrets.TDESKTOP_API_HASH || secrets.AYUGRAM_API_HASH || secrets.TELEGRAM_API_HASH || secrets.API_HASH) || 'b18441a1ff607e10a989891a5462e627' }}
   FAST_CI: ${{ github.event_name != 'workflow_dispatch' || inputs.ci_only }}
   CI_QT_VERSION: 6.11.2
   CI_MACOS_MINIMUM: '12.0'
@@ -261,13 +261,9 @@ jobs:
         env:
           PRODUCTION_UPDATE: ${{ needs.preflight.outputs.production-update }}
           BUILD_JOBS: ${{ inputs.build_jobs || '2' }}
-          PUBLIC_API_ID: '2040'
-          PUBLIC_API_HASH: 'b18441a1ff607e10a989891a5462e627'
         run: |
           docker_args=(-e KEEP_GOING=1)
           if [[ "$FAST_CI" == true ]]; then
-            TDESKTOP_API_ID="$PUBLIC_API_ID"
-            TDESKTOP_API_HASH="$PUBLIC_API_HASH"
             docker_args=(
               -v "$RUNNER_TEMP/linux-ccache:/var/cache/ccache"
               -e SLEEPYGRAM_CI_CCACHE=1
@@ -299,6 +295,11 @@ jobs:
               -D TDESKTOP_BUILD_UPDATE_TESTS=ON \
               -D SLEEPYGRAM_UPDATE_KEYS_DIR="$update_keys" \
               -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
+
+      - name: Report Linux executable link time
+        if: steps.build.outcome == 'success'
+        run: |
+          awk -F '\t' '$4 == "Release/SleepyGram" { print "SleepyGram link: " ($2 - $1) / 1000 " s" }' out/.ninja_log
 
       - name: Save Linux compiler cache
         if: env.FAST_CI == 'true' && github.event_name != 'pull_request' && steps.compiler-cache.outputs.cache-hit != 'true'
