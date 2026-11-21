@@ -48,5 +48,7 @@ footprint, and executable link time. PRs restore existing caches. Pushes to
 `dev` and manual fast runs can prime a weekly compiler cache scoped to their
 ref. Manual package builds and stable releases use the original precompiled
 header and never restore the compiler cache. The dependency caches are saved
-on `dev`; macOS restores or builds its dependencies in the same job as the
-client. The macOS cache is saved after the existing build-intermediate cleanup.
+on `dev`. Manual runs can opt in to dependency saves for their own ref with
+`save_dependency_cache=true`. macOS restores or builds its dependencies in the
+same job as the client and saves them after the existing build-intermediate
+cleanup.

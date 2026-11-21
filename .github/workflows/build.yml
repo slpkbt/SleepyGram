@@ -35,6 +35,10 @@ on:
           - '2'
           - '3'
           - '4'
+      save_dependency_cache:
+        description: Save native and Docker dependencies for this manual run's ref
+        type: boolean
+        default: false
       publish_release:
         description: Publish the signed stable release from protected dev (platform all)
         required: false
@@ -58,6 +62,7 @@ env:
   TDESKTOP_API_ID: ${{ github.event_name == 'workflow_dispatch' && !inputs.ci_only && (secrets.TDESKTOP_API_ID || secrets.AYUGRAM_API_ID || secrets.TELEGRAM_API_ID || secrets.API_ID) || '2040' }}
   TDESKTOP_API_HASH: ${{ github.event_name == 'workflow_dispatch' && !inputs.ci_only && (secrets.TDESKTOP_API_HASH || secrets.AYUGRAM_API_HASH || secrets.TELEGRAM_API_HASH || secrets.API_HASH) || 'b18441a1ff607e10a989891a5462e627' }}
   FAST_CI: ${{ github.event_name != 'workflow_dispatch' || inputs.ci_only }}
+  SAVE_DEPENDENCY_CACHE: ${{ github.ref == 'refs/heads/dev' || (github.event_name == 'workflow_dispatch' && inputs.save_dependency_cache) }}
   CI_QT_VERSION: 6.11.2
   CI_MACOS_MINIMUM: '12.0'
 
@@ -205,16 +210,16 @@ jobs:
           load: true
           tags: ${{ env.IMAGE_TAG }}
           cache-from: type=local,src=${{ runner.temp }}/.buildx-cache
-          cache-to: ${{ github.ref == 'refs/heads/dev' && steps.linux-cache.outputs.cache-hit != 'true' && format('type=local,dest={0}/.buildx-cache-new,mode=max', runner.temp) || '' }}
+          cache-to: ${{ env.SAVE_DEPENDENCY_CACHE == 'true' && steps.linux-cache.outputs.cache-hit != 'true' && format('type=local,dest={0}/.buildx-cache-new,mode=max', runner.temp) || '' }}
 
       - name: Move Docker cache
-        if: github.ref == 'refs/heads/dev' && steps.linux-cache.outputs.cache-hit != 'true'
+        if: env.SAVE_DEPENDENCY_CACHE == 'true' && steps.linux-cache.outputs.cache-hit != 'true'
         run: |
           rm -rf "$RUNNER_TEMP/.buildx-cache"
           mv "$RUNNER_TEMP/.buildx-cache-new" "$RUNNER_TEMP/.buildx-cache"
 
       - name: Save Docker layers
-        if: github.ref == 'refs/heads/dev' && steps.linux-cache.outputs.cache-hit != 'true'
+        if: env.SAVE_DEPENDENCY_CACHE == 'true' && steps.linux-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/.buildx-cache
@@ -529,7 +534,7 @@ jobs:
           du -sh Libraries ThirdParty
 
       - name: Save macOS dependencies
-        if: github.ref == 'refs/heads/dev' && steps.prepare.outcome == 'success' && steps.mac-qt-prune.outcome == 'success'
+        if: env.SAVE_DEPENDENCY_CACHE == 'true' && steps.prepare.outcome == 'success' && steps.mac-qt-prune.outcome == 'success'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -843,14 +848,14 @@ jobs:
         run: python "$env:REPO_PATH\.github\ci\prune_windows_qt_sources.py" --libraries "$env:LIBRARIES_PATH" --qt-version "$env:CI_QT_VERSION"
 
       - name: Save Windows build tools
-        if: github.ref == 'refs/heads/dev' && steps.windows-third-party-cache.outputs.cache-hit != 'true'
+        if: env.SAVE_DEPENDENCY_CACHE == 'true' && steps.windows-third-party-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: TBuild\ThirdParty
           key: windows-x64-third-party-${{ env.TBUILD_VOLUME }}-${{ steps.cache-key.outputs.key }}
 
       - name: Save Windows libraries
-        if: github.ref == 'refs/heads/dev' && steps.windows-libraries-cache.outputs.cache-hit != 'true'
+        if: env.SAVE_DEPENDENCY_CACHE == 'true' && steps.windows-libraries-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: TBuild\Libraries\win64
