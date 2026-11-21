@@ -1,6 +1,7 @@
 from argparse import Namespace
 from hashlib import sha256
 import json
+import plistlib
 import subprocess
 import tempfile
 import unittest
@@ -13,6 +14,7 @@ from build_artifact import (
     PLATFORMS,
     _parse_gitlinks,
     submodule_revisions,
+    verify_macos_version,
     verify_package,
     verify_release,
 )
@@ -61,6 +63,23 @@ class ReleaseInstallerTests(unittest.TestCase):
             with ZipFile(archive, "a") as package:
                 package.writestr("SleepyGram.app/Contents/Resources/SleepyGram.icns", b"icns")
             self.assertEqual(verify_package(archive, "macos-arm64")["platform"], "macos-arm64")
+
+    def test_checks_both_macos_version_fields_independently(self):
+        matches = {"CFBundleShortVersionString": "7.5.2", "CFBundleVersion": "7.5.2"}
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / PLATFORMS["macos-arm64"][0]
+            for wrong in (None, "CFBundleShortVersionString", "CFBundleVersion"):
+                plist = matches.copy()
+                if wrong:
+                    plist[wrong] = "7.4.3"
+                with ZipFile(archive, "w") as package:
+                    package.writestr("SleepyGram.app/Contents/Info.plist", plistlib.dumps(plist))
+                if wrong:
+                    with self.subTest(field=wrong):
+                        with self.assertRaisesRegex(RuntimeError, wrong):
+                            verify_macos_version(archive, "7.5.2")
+                else:
+                    verify_macos_version(archive, "7.5.2")
 
     def test_requires_the_dmg_verified_by_the_mac_build(self):
         with tempfile.TemporaryDirectory() as temporary:

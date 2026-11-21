@@ -1,15 +1,18 @@
 #include "ayu/features/chat_lock/chat_lock.h"
 
+#include "ayu/features/chat_lock/chat_pin_input.h"
+
 #include "base/random.h"
 #include "base/weak_ptr.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
 #include "mtproto/mtproto_auth_key.h"
+#include "settings/cloud_password/settings_cloud_password_common.h"
 #include "storage/details/storage_file_utilities.h"
 #include "storage/storage_account.h"
 #include "ui/layers/generic_box.h"
+#include "ui/widgets/labels.h"
 #include "ui/widgets/fields/password_input.h"
-#include "ui/vertical_list.h"
 #include "window/window_session_controller.h"
 #include "styles/style_settings.h"
 #include "styles/style_passcode_box.h"
@@ -24,6 +27,7 @@
 #include <QApplication>
 #include <QEvent>
 #include <QStringList>
+#include <QStringView>
 #include <QTimer>
 
 namespace Ayu::ChatLock {
@@ -187,6 +191,10 @@ public:
 		return true;
 	}
 
+	void endVerification(uint64 accountId) {
+		state(accountId).verifying = false;
+	}
+
 	bool eventFilter(QObject *watched, QEvent *event) override {
 		if (event->type() == QEvent::KeyPress
 			|| event->type() == QEvent::MouseButtonPress
@@ -306,14 +314,13 @@ bool IsChatLocked(not_null<Main::Session*> session, PeerId peerId) {
 	return !Manager::Instance().state(session->userId().bare).unlockedPeers.contains(peerId);
 }
 
+namespace {
+
 void SetPin(
 		not_null<Main::Session*> session,
 		QString pin,
+		Fn<bool()> canCommit,
 		Fn<void(bool)> done) {
-	if (pin.size() < 4 || pin.size() > 64) {
-		done(false);
-		return;
-	}
 	auto salt = QByteArray(kPinSaltSize, Qt::Uninitialized);
 	base::RandomFill(salt.data(), salt.size());
 	auto job = Derivation{
@@ -327,7 +334,10 @@ void SetPin(
 	const auto weak = base::make_weak(session.get());
 	RunDerivation(std::move(job), [=](Derivation result) mutable {
 		const auto strong = weak.get();
-		if (!strong || result.result.isEmpty()) {
+		if (!canCommit()) {
+			return;
+		}
+		if (!strong || HasPin(strong) || result.result.isEmpty()) {
 			done(false);
 			return;
 		}
@@ -353,6 +363,7 @@ void VerifyPin(
 		not_null<Main::Session*> session,
 		PeerId peerId,
 		QString pin,
+		Fn<bool()> canCommit,
 		Fn<void(bool)> done) {
 	auto &manager = Manager::Instance();
 	manager.load(session);
@@ -373,10 +384,11 @@ void VerifyPin(
 	auto job = Derivation{ .passcode = pin.toUtf8(), .material = material };
 	pin.fill(QChar(0));
 	const auto weak = base::make_weak(session.get());
+	const auto accountId = session->userId().bare;
 	RunDerivation(std::move(job), [=](Derivation result) mutable {
 		const auto strong = weak.get();
-		if (!strong) {
-			done(false);
+		if (!strong || !canCommit()) {
+			Manager::Instance().endVerification(accountId);
 			return;
 		}
 		if (!result.matched) {
@@ -388,6 +400,8 @@ void VerifyPin(
 		done(true);
 	});
 }
+
+} // namespace
 
 bool SetPeerProtected(
 		not_null<Main::Session*> session,
@@ -438,41 +452,75 @@ void ShowUnlockDialog(
 		not_null<Window::SessionController*> controller,
 		PeerId peerId,
 		Fn<void(bool)> done) {
-	const auto session = &controller->session();
-	const auto weak = base::make_weak(controller.get());
+	const auto weakController = base::make_weak(controller.get());
+	const auto weakSession = base::make_weak(&controller->session());
 	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+		using namespace ::Settings::CloudPassword;
 		const auto weakBox = base::weak_qptr<Ui::BoxContent>(box.get());
-		box->setTitle(tr::lng_passcode_enter_old());
-		const auto wrap = box->addRow(object_ptr<Ui::RpWidget>(box));
-		wrap->resize(wrap->width(), st::settingLocalPasscodeInputField.heightMin);
-		const auto field = Ui::CreateChild<Ui::PasswordInput>(
-			wrap,
-			st::settingLocalPasscodeInputField,
-			tr::lng_passcode_enter_old());
-		wrap->widthValue(
-		) | rpl::on_next([=](int width) {
-			field->moveToLeft((width - field->width()) / 2, 0);
-		}, wrap->lifetime());
-		box->setFocusCallback([=] { field->setFocus(); });
-		box->addButton(tr::lng_cancel(), [=] {
-			box->closeBox();
-			if (done) done(false);
-		});
-		box->addButton(tr::lng_continue(), [=] {
+		const auto state = std::make_shared<PinDialogState>();
+		const auto canCommit = [=] {
+			const auto controller = weakController.get();
+			const auto session = weakSession.get();
+			return !state->closed && weakBox && controller && session
+				&& (&controller->session() == session);
+		};
+		box->setTitle(tr::lng_ayu_chat_pin_unlock());
+		const auto content = box->verticalLayout();
+		const auto field = AddPasswordField(
+			content,
+			tr::lng_passcode_enter_old(),
+			QString());
+		const auto error = AddError(content, field);
+		box->setFocusCallback([=] { field->setFocusFast(); });
+		box->boxClosing() | rpl::on_next([=] {
+			state->closed = true;
+			if (!state->completed && done) {
+				done(false);
+			}
+		}, box->lifetime());
+		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
+		const auto submit = [=] {
+			if (state->submitting || !canCommit()) {
+				return;
+			}
+			const auto session = weakSession.get();
+			if (field->text().isEmpty()) {
+				field->showError();
+				return;
+			}
+			if (Manager::Instance().blocked(session)) {
+				error->setText(tr::lng_ayu_chat_pin_wait(tr::now));
+				error->show();
+				return;
+			}
+			if (!state->beginSubmit()) {
+				return;
+			}
 			auto pin = field->text();
 			field->clear();
-			VerifyPin(session, peerId, std::move(pin), [=](bool success) {
-			const auto strongBox = weakBox.get();
-			if (!weak || !strongBox) return;
+			field->setDisabled(true);
+			error->hide();
+			VerifyPin(session, peerId, std::move(pin), canCommit, [=](bool success) {
+				if (!canCommit()) {
+					return;
+				}
+				state->submitting = false;
 				if (success) {
-				strongBox->closeBox();
-					if (done) done(true);
+					state->completed = true;
+					weakBox.get()->closeBox();
+					if (done) {
+						done(true);
+					}
 				} else {
-					field->clear();
-					field->setPlaceholderText(tr::lng_passcode_wrong(tr::now));
+					field->setDisabled(false);
+					field->showError();
+					error->setText(tr::lng_passcode_wrong(tr::now));
+					error->show();
 				}
 			});
-		});
+		};
+		QObject::connect(field.get(), &Ui::MaskedInputField::submitted, submit);
+		box->addButton(tr::lng_continue(), submit);
 	}));
 }
 
@@ -492,47 +540,89 @@ void ShowProtectDialog(
 		}
 		return;
 	}
+	const auto weakController = base::make_weak(controller.get());
+	const auto weakSession = base::make_weak(session);
 	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+		using namespace ::Settings::CloudPassword;
 		const auto weakBox = base::weak_qptr<Ui::BoxContent>(box.get());
-		box->setTitle(tr::lng_passcode_create());
-		const auto makeField = [&](rpl::producer<QString> placeholder) {
-			const auto wrap = box->addRow(object_ptr<Ui::RpWidget>(box));
-			wrap->resize(wrap->width(), st::settingLocalPasscodeInputField.heightMin);
-			const auto field = Ui::CreateChild<Ui::PasswordInput>(
-				wrap,
-				st::settingLocalPasscodeInputField,
-				std::move(placeholder));
-			wrap->widthValue(
-			) | rpl::on_next([=](int width) {
-				field->moveToLeft((width - field->width()) / 2, 0);
-			}, wrap->lifetime());
-			return field;
+		const auto state = std::make_shared<PinDialogState>();
+		const auto canCommit = [=] {
+			const auto controller = weakController.get();
+			const auto session = weakSession.get();
+			return !state->closed && weakBox && controller && session
+				&& (&controller->session() == session);
 		};
-		const auto first = makeField(tr::lng_passcode_enter_first());
-		const auto second = makeField(tr::lng_passcode_confirm_new());
-		box->setFocusCallback([=] { first->setFocus(); });
+		const auto content = box->verticalLayout();
+		box->setTitle(tr::lng_ayu_chat_pin_protect());
+		const auto first = AddPasswordField(
+			content,
+			tr::lng_passcode_enter_first(),
+			QString());
+		const auto second = AddPasswordField(
+			content,
+			tr::lng_passcode_confirm_new(),
+			QString());
+		const auto error = AddError(content, second);
+		box->setFocusCallback([=] { first->setFocusFast(); });
+		box->boxClosing() | rpl::on_next([=] {
+			state->closed = true;
+		}, box->lifetime());
 		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
-		box->addButton(tr::lng_continue(), [=] {
-			auto pin = first->text();
-			const auto confirmation = second->text();
-			first->clear();
-			second->clear();
-			if (pin.size() < 4 || pin != confirmation) {
-				pin.fill(QChar(0));
-				first->setPlaceholderText(tr::lng_passcode_differ(tr::now));
+		const auto submit = [=] {
+			if (state->submitting || !canCommit()) {
 				return;
 			}
-			SetPin(session, std::move(pin), [=](bool success) {
-				const auto strongBox = weakBox.get();
-				if (!strongBox) return;
-				if (success) {
-					SetPeerProtected(session, peerId, true);
-					strongBox->closeBox();
+			const auto inputError = CheckNewPin(
+				QStringView(first->text()),
+				QStringView(second->text()));
+			if (inputError == PinInputError::Length) {
+				first->showError();
+				error->setText(tr::lng_ayu_chat_pin_length(tr::now));
+				error->show();
+				return;
+			}
+			if (inputError == PinInputError::Mismatch) {
+				second->showError();
+				error->setText(tr::lng_passcode_differ(tr::now));
+				error->show();
+				return;
+			}
+			if (!state->beginSubmit()) {
+				return;
+			}
+			auto pin = first->text();
+			first->clear();
+			second->clear();
+			first->setDisabled(true);
+			second->setDisabled(true);
+			error->hide();
+			SetPin(weakSession.get(), std::move(pin), canCommit, [=](bool success) {
+				if (!canCommit()) {
+					return;
+				}
+				state->submitting = false;
+				if (success && SetPeerProtected(weakSession.get(), peerId, true)) {
+					if (const auto strongBox = weakBox.get()) {
+						strongBox->closeBox();
+					}
 				} else {
-					first->setPlaceholderText(tr::lng_passcode_wrong(tr::now));
+					first->setDisabled(false);
+					second->setDisabled(false);
+					first->showError();
+					error->setText(tr::lng_ayu_chat_pin_save_failed(tr::now));
+					error->show();
 				}
 			});
+		};
+		QObject::connect(first.get(), &Ui::MaskedInputField::submitted, [=] {
+			if (second->text().isEmpty()) {
+				second->setFocusFast();
+			} else {
+				submit();
+			}
 		});
+		QObject::connect(second.get(), &Ui::MaskedInputField::submitted, submit);
+		box->addButton(tr::lng_continue(), submit);
 	}));
 }
 

@@ -2953,7 +2953,9 @@ void SendFilesBox::send(
 				if (const auto strong = weak.get()) {
 					strong->_sendGuardConfirmed = true;
 					strong->send(options, ctrlShiftEnter);
-					strong->_sendGuardConfirmed = false;
+					if (const auto stillOpen = weak.get()) {
+						stillOpen->_sendGuardConfirmed = false;
+					}
 				}
 			});
 		return;

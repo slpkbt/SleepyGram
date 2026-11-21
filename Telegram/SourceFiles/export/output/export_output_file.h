@@ -26,6 +26,10 @@ public:
 	[[nodiscard]] int64 size() const;
 	[[nodiscard]] bool empty() const;
 	void setResumeOffset(int64 offset);
+	[[nodiscard]] static bool CheckResumeTail(
+		const QString &path,
+		int64 offset,
+		const QByteArray &expected);
 
 	[[nodiscard]] Result writeBlock(const QByteArray &block);
 

@@ -675,11 +675,14 @@ void System::schedule(Data::ItemNotification notification) {
 		thread->popNotification(notification);
 		return;
 	}
-	if (Ayu::NotifyBatch::IsEnabledForPeer(
+	const auto ready = (skip.value != SkipState::Unknown)
+		&& item->notificationReady();
+	if (ready && Ayu::NotifyBatch::IsEnabledForPeer(
 			&item->history()->session(),
 			item->history()->peer->id)
 		&& !Ayu::NotifyBatch::ShouldBypass(notification)) {
 		thread->popNotification(notification);
+		registerThread(thread);
 		const auto now = crl::now();
 		const auto quietMs = Ayu::NotifyBatch::QuietWindowMs();
 		const auto maxWaitMs = Ayu::NotifyBatch::MaxWaitMs();
@@ -689,7 +692,7 @@ void System::schedule(Data::ItemNotification notification) {
 			.topicRootId = item->topicRootId(),
 		};
 		auto &batch = _batches[batchKey];
-		if (!batch.firstAt) {
+		if (!batch.count) {
 			batch.firstAt = now;
 		}
 		batch.lastItemId = item->fullId();
@@ -698,8 +701,6 @@ void System::schedule(Data::ItemNotification notification) {
 		scheduleBatchFlush();
 		return;
 	}
-	const auto ready = (skip.value != SkipState::Unknown)
-		&& item->notificationReady();
 
 	const auto minimalDelay = (type == Data::ItemNotificationType::Reaction
 		|| type == Data::ItemNotificationType::PollVote)
@@ -861,8 +862,8 @@ void System::flushBatches() {
 		if (Ayu::ChatLock::IsChatLocked(session, item->history()->peer->id)) {
 			continue;
 		}
-		const auto thread = item->notificationThread();
-		if (!item->unread(thread)) {
+		const auto thread = item->maybeNotificationThread();
+		if (!thread || !item->notificationReady() || !item->unread(thread)) {
 			continue;
 		}
 		const auto notify = Data::ItemNotification{
@@ -870,7 +871,7 @@ void System::flushBatches() {
 			.type = Data::ItemNotificationType::Message,
 		};
 		const auto skip = computeSkipState(notify);
-		if (skip.value == SkipState::Skip || QuietForItem(item)) {
+		if (skip.value != SkipState::DontSkip) {
 			continue;
 		}
 		const auto soundId = skip.silent

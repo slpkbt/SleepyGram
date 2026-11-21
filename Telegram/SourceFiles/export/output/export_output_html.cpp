@@ -6421,15 +6421,20 @@ Result HtmlWriter::writeDialogStart(const Data::DialogInfo &data) {
 	Expects(_chat == nullptr);
 
 	_dialog = data;
-	if (_settings.onlySinglePeer()
-		&& _settings.incremental
-		&& _settings.incrementalState
-		&& _settings.incrementalState->htmlLastFileCloseOffset > 0
-		&& _settings.incrementalState->messagesCount > 0) {
-		const auto &st = *_settings.incrementalState;
+	if (_settings.onlySinglePeer() && _settings.incremental) {
+		const auto state = _settings.incrementalState.get();
+		if (!state || state->messagesCount <= 0
+			|| state->htmlLastFileIndex
+				!= (state->messagesCount - 1) / kMessagesInFile) {
+			return Result(Result::Type::FatalError, mainFilePath());
+		}
+		const auto &st = *state;
 		const auto relPath = data.relativePath + messagesFile(st.htmlLastFileIndex);
-		auto probe = QFile(pathWithRelativePath(relPath));
-		if (probe.exists() && probe.size() >= st.htmlLastFileCloseOffset) {
+		const auto path = pathWithRelativePath(relPath);
+		if (File::CheckResumeTail(
+				path,
+				st.htmlLastFileCloseOffset,
+				"</div> </div> </div> </body> </html>")) {
 			_chat = fileWithRelativePath(relPath);
 			(void)_chat->pushDiv("page_body chat_page");
 			(void)_chat->pushDiv("history");
@@ -6459,6 +6464,7 @@ Result HtmlWriter::writeDialogStart(const Data::DialogInfo &data) {
 			}
 			return Result::Success();
 		}
+		return Result(Result::Type::FatalError, path);
 	}
 
 	_chat = fileWithRelativePath(data.relativePath + messagesFile(0));

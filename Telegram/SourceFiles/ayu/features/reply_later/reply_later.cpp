@@ -131,24 +131,28 @@ void CheckDueReminders() {
 		if (!session) {
 			continue;
 		}
+		const auto &windows = session->windows();
+		if (windows.empty()) {
+			continue;
+		}
 		auto entries = LoadEntries(session);
 		auto due = std::vector<Entry>();
-		auto changed = false;
 		for (auto &entry : entries) {
 			if (entry.dueAt > 0 && entry.dueAt <= now && entry.firedAt == 0) {
 				entry.firedAt = now;
 				due.push_back(entry);
-				changed = true;
 			}
 		}
-		if (!changed) {
+		if (due.empty()) {
 			continue;
 		}
-		SaveEntries(session, entries);
-		const auto controller = session->tryResolveWindow();
-		if (!controller) {
-			continue;
-		}
+		const auto primary = std::find_if(
+			windows.begin(),
+			windows.end(),
+			[](const auto &window) { return window->isPrimary(); });
+		const auto controller = (primary != windows.end())
+			? primary->get()
+			: windows.front().get();
 		const auto weakController = base::make_weak(controller);
 		if (due.size() > 1) {
 			const auto openLink = tr::link(
@@ -170,7 +174,7 @@ void CheckDueReminders() {
 				},
 				.duration = crl::time(8000),
 			});
-		} else if (!due.empty()) {
+		} else {
 			const auto entry = due.front();
 			const auto locked = Ayu::ChatLock::IsChatLocked(
 				session,
@@ -203,6 +207,7 @@ void CheckDueReminders() {
 				.duration = crl::time(8000),
 			});
 		}
+		SaveEntries(session, entries);
 	}
 }
 
@@ -226,7 +231,7 @@ int64 ComputePresetTime(Preset preset) {
 		return now.toSecsSinceEpoch() + 3600;
 	case Preset::ThisEvening: {
 		auto targetDate = now.date();
-		if (now.time().hour() >= 18) {
+		if (now.time() >= QTime(19, 0)) {
 			targetDate = targetDate.addDays(1);
 		}
 		return QDateTime(targetDate, QTime(19, 0)).toSecsSinceEpoch();

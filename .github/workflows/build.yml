@@ -91,6 +91,10 @@ jobs:
           cmake -S .github/ci/update-native -B "$RUNNER_TEMP/update-native" -DCMAKE_BUILD_TYPE=Release
           cmake --build "$RUNNER_TEMP/update-native" --parallel 2 --target Updater
           python3 tools/tests/test_sleepy_updater.py --helper "$RUNNER_TEMP/update-native/Updater"
+      - name: Test chat PIN entry
+        run: |
+          c++ -std=c++20 -Wall -Wextra -Werror -I Telegram/SourceFiles tools/tests/test_chat_pin_input.cpp -o "$RUNNER_TEMP/chat-pin-input"
+          "$RUNNER_TEMP/chat-pin-input"
       - name: Test language key preflight
         run: python3 .github/ci/test_preflight_lang.py
       - name: Test build diagnostics
@@ -727,9 +731,13 @@ jobs:
           codesign --force --deep --sign - "$app"
           codesign --verify --deep --strict "$app"
           ditto -c -k --sequesterRsrc --keepParent "$app" "$RUNNER_TEMP/SleepyGram-macos-arm64.zip"
+          version_string="$(sed -nE 's/^[[:space:]]*constexpr auto AppVersionStr = "([0-9.]+)";.*/\1/p' \
+            tdesktop/Telegram/SourceFiles/core/version.h)"
+          test -n "$version_string"
           python3 tdesktop/.github/ci/build_artifact.py verify-package \
             --platform macos-arm64 \
-            --archive "$RUNNER_TEMP/SleepyGram-macos-arm64.zip"
+            --archive "$RUNNER_TEMP/SleepyGram-macos-arm64.zip" \
+            --macos-version "$version_string"
           extracted="$RUNNER_TEMP/sleepygram-macos-arm64-extracted"
           mkdir -p "$extracted"
           ditto -x -k "$RUNNER_TEMP/SleepyGram-macos-arm64.zip" "$extracted"

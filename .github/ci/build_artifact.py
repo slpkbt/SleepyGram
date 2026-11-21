@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import platform
+import plistlib
 import re
 import subprocess
 import sys
@@ -297,7 +298,25 @@ def archive_members(archive: Path, platform_name: str) -> tuple[set[str], bytes]
         return names, stream.read()
 
 
-def verify_package(archive: Path, platform_name: str) -> dict[str, object]:
+def verify_macos_version(archive: Path, expected: str) -> None:
+    with zipfile.ZipFile(archive) as package:
+        info = package.getinfo("SleepyGram.app/Contents/Info.plist")
+        if info.file_size > MAX_MANIFEST_SIZE:
+            raise RuntimeError("macOS Info.plist exceeds the 1 MiB safety limit.")
+        try:
+            plist = plistlib.loads(package.read(info))
+        except (ValueError, plistlib.InvalidFileException) as error:
+            raise RuntimeError("Invalid macOS Info.plist.") from error
+    if not isinstance(plist, dict):
+        raise RuntimeError("Invalid macOS Info.plist dictionary.")
+    for field in ("CFBundleShortVersionString", "CFBundleVersion"):
+        if plist.get(field) != expected:
+            raise RuntimeError(f"macOS {field} differs from runtime version {expected}.")
+
+
+def verify_package(
+    archive: Path, platform_name: str, macos_version: str | None = None,
+) -> dict[str, object]:
     if archive.name != PLATFORMS[platform_name][0]:
         raise RuntimeError(f"Expected artifact name {PLATFORMS[platform_name][0]}.")
     names, manifest_bytes = archive_members(archive, platform_name)
@@ -335,6 +354,10 @@ def verify_package(archive: Path, platform_name: str) -> dict[str, object]:
         raise RuntimeError("Artifact manifest is not valid JSON.") from error
     if manifest.get("schema_version") != 1 or manifest.get("platform") != platform_name:
         raise RuntimeError("Artifact manifest does not match its platform.")
+    if macos_version is not None:
+        if platform_name != "macos-arm64" or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", macos_version):
+            raise RuntimeError("Expected a numeric three-component macOS bundle version.")
+        verify_macos_version(archive, macos_version)
     package = manifest.get("package", {})
     if platform_name == "macos-arm64" and isinstance(package, dict) and "removal_inventory" in package:
         inventory = package["removal_inventory"]
@@ -441,7 +464,10 @@ def parser() -> argparse.ArgumentParser:
     package = commands.add_parser("verify-package", help="check archive structure and manifest")
     package.add_argument("--platform", choices=sorted(PLATFORMS), required=True)
     package.add_argument("--archive", type=Path, required=True)
-    package.set_defaults(function=lambda args: verify_package(args.archive.resolve(), args.platform))
+    package.add_argument("--macos-version", help="Expected version in both macOS Info.plist keys.")
+    package.set_defaults(function=lambda args: verify_package(
+        args.archive.resolve(), args.platform, args.macos_version,
+    ))
     release = commands.add_parser("verify-release", help="check complete same-run package set")
     release.add_argument("--directory", type=Path, required=True)
     release.add_argument("--source-sha", required=True)

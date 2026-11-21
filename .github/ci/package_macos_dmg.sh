@@ -27,6 +27,7 @@ hdiutil attach "$work/SleepyGram.dmg" -readonly -nobrowse -noautoopen \
 mounted=true
 
 test "$(readlink "$work/mount/Applications")" = /Applications
+cmp "$app/Contents/Info.plist" "$work/mount/SleepyGram.app/Contents/Info.plist"
 resources="Contents/Resources"
 cmp "$app/$resources/BuildManifest.json" \
   "$work/mount/SleepyGram.app/$resources/BuildManifest.json"

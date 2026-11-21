@@ -2,7 +2,7 @@
 
 #include "apiwrap.h"
 #include "ayu/features/chat_lock/chat_lock.h"
-#include "base/timer.h"
+#include "base/call_delayed.h"
 #include "data/data_chat_filters.h"
 #include "data/data_folder.h"
 #include "data/data_peer.h"
@@ -30,9 +30,24 @@ constexpr auto kPacedActionDelayMs = 45;
 
 struct PacedQueue {
 	std::deque<PeerId> peerIds;
-	base::Timer timer;
 	Fn<void(not_null<History*>)> step;
 };
+
+void SchedulePacedPeerStep(
+		not_null<Main::Session*> session,
+		std::shared_ptr<PacedQueue> state,
+		crl::time delay) {
+	base::call_delayed(delay, session, [session, state = std::move(state)] {
+		const auto peerId = state->peerIds.front();
+		state->peerIds.pop_front();
+		if (const auto history = session->data().historyLoaded(peerId)) {
+			state->step(history);
+		}
+		if (!state->peerIds.empty()) {
+			SchedulePacedPeerStep(session, state, kPacedActionDelayMs);
+		}
+	});
+}
 
 void RunPacedPeerQueue(
 		not_null<Main::Session*> session,
@@ -44,21 +59,7 @@ void RunPacedPeerQueue(
 	auto state = std::make_shared<PacedQueue>();
 	state->peerIds.assign(peerIds.begin(), peerIds.end());
 	state->step = std::move(step);
-	const auto raw = state.get();
-	raw->timer.setCallback(crl::guard(session, [session, state] {
-		if (state->peerIds.empty()) {
-			return;
-		}
-		const auto peerId = state->peerIds.front();
-		state->peerIds.pop_front();
-		if (const auto history = session->data().historyLoaded(peerId)) {
-			state->step(history);
-		}
-		if (!state->peerIds.empty()) {
-			state->timer.callOnce(kPacedActionDelayMs);
-		}
-	}));
-	raw->timer.callOnce(0);
+	SchedulePacedPeerStep(session, std::move(state), 0);
 }
 
 [[nodiscard]] bool CanToggleArchive(not_null<History*> history) {
@@ -161,10 +162,10 @@ void BulkAddToFolder(
 	auto hitLimit = false;
 	for (const auto peerId : peerIds) {
 		const auto history = session->data().historyLoaded(peerId);
-		if (!history) {
+		if (!history || was.contains(history)) {
 			continue;
 		}
-		never.remove(history);
+		const auto wasExcluded = never.remove(history);
 		const auto probe = Data::ChatFilter(
 			was.id(),
 			was.title(),
@@ -177,7 +178,10 @@ void BulkAddToFolder(
 		if (!probe.contains(history)) {
 			if (int(always.size()) >= limit) {
 				hitLimit = true;
-				break;
+				if (wasExcluded) {
+					never.insert(history);
+				}
+				continue;
 			}
 			always.insert(history);
 		}

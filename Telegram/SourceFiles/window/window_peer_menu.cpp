@@ -3323,7 +3323,7 @@ base::weak_qptr<Ui::BoxContent> ShowForwardMessagesBox(
 	const auto session = &show->session();
 	const auto owner = &session->data();
 	const auto itemsList = owner->idsToItems(draft.ids);
-	if (ranges::any_of(itemsList, [&](not_null<HistoryItem*> item) {
+	if (itemsList.empty() || ranges::any_of(itemsList, [&](not_null<HistoryItem*> item) {
 			return Ayu::ChatLock::IsChatLocked(
 				session,
 				item->history()->peer->id);
@@ -3756,8 +3756,9 @@ base::weak_qptr<Ui::BoxContent> ShowForwardMessagesBox(
 	}();
 
 	{ // Chosen a single.
-		auto chosen = [show, draft = std::move(draft)](
-				not_null<Data::Thread*> thread) mutable {
+		auto chosen = [show, originalDraft = std::move(draft)](
+				not_null<Data::Thread*> thread) {
+			auto draft = originalDraft;
 			const auto peer = thread->peer();
 			if (Ayu::ChatLock::IsChatLocked(&peer->session(), peer->id)) {
 				return false;
@@ -3821,7 +3822,12 @@ base::weak_qptr<Ui::BoxContent> ShowForwardMessagesBox(
 			tr::lng_photos_comment()),
 		st::shareCommentPadding);
 
-	const auto history = session->data().message(msgIds.front())->history();
+	const auto first = session->data().message(msgIds.front());
+	if (!first) {
+		state->box->closeBox();
+		return nullptr;
+	}
+	const auto history = first->history();
 	const auto send = ShareBox::DefaultForwardCallback(
 		show,
 		history,

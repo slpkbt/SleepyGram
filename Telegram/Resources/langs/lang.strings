@@ -9670,6 +9670,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_ayu_chat_pin_lock" = "Lock Chat Now";
 "lng_ayu_chat_pin_lock_all" = "Lock All Protected Chats";
 "lng_ayu_chat_pin_remove" = "Remove PIN Protection";
+"lng_ayu_chat_pin_length" = "Use a PIN with 4 to 64 characters.";
+"lng_ayu_chat_pin_save_failed" = "Could not save the chat PIN. Close this window and try again.";
+"lng_ayu_chat_pin_wait" = "Please wait before trying the PIN again.";
 
 "ayu_AccountTransferTitle" = "Move account to another computer";
 "ayu_AccountTransferInstructions" = "On the destination computer, install SleepyGram and use Add Account > Log in by QR code to sign in through Telegram. Then import the settings JSON and encrypted archive files there. This wizard exports settings and archived text only; it never exports login credentials or authorization data. Keep the archive password safe.";

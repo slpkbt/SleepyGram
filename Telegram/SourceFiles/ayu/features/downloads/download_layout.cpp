@@ -42,13 +42,14 @@ constexpr auto kMaxSegmentLength = 80;
 }
 
 [[nodiscard]] bool IsReservedWindowsName(const QString &name) {
-	const auto upper = name.toUpper();
+	const auto upper = name.section(u'.', 0, 0).trimmed().toUpper();
 	static const auto kReserved = std::array{
 		u"CON"_q, u"PRN"_q, u"AUX"_q, u"NUL"_q,
 		u"COM1"_q, u"COM2"_q, u"COM3"_q, u"COM4"_q, u"COM5"_q,
 		u"COM6"_q, u"COM7"_q, u"COM8"_q, u"COM9"_q,
 		u"LPT1"_q, u"LPT2"_q, u"LPT3"_q, u"LPT4"_q, u"LPT5"_q,
 		u"LPT6"_q, u"LPT7"_q, u"LPT8"_q, u"LPT9"_q,
+		u"COM¹"_q, u"COM²"_q, u"COM³"_q, u"LPT¹"_q, u"LPT²"_q, u"LPT³"_q,
 	};
 	for (const auto &entry : kReserved) {
 		if (upper == entry) {
@@ -133,7 +134,10 @@ QString SanitizePathSegment(const QString &raw) {
 		out.remove(0, 1);
 	}
 	if (out.size() > kMaxSegmentLength) {
-		out = out.left(kMaxSegmentLength).trimmed();
+		const auto length = out.at(kMaxSegmentLength - 1).isHighSurrogate()
+			? (kMaxSegmentLength - 1)
+			: kMaxSegmentLength;
+		out = out.left(length).trimmed();
 		while (!out.isEmpty() && out.endsWith('.')) {
 			out.chop(1);
 		}

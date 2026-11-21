@@ -37,6 +37,23 @@ void File::setResumeOffset(int64 offset) {
 	_offset = offset;
 }
 
+bool File::CheckResumeTail(
+		const QString &path,
+		int64 offset,
+		const QByteArray &expected) {
+	constexpr auto kMaxFooterBytes = 256;
+	auto probe = QFile(path);
+	if (offset <= 0
+		|| !probe.open(QIODevice::ReadOnly)
+		|| offset >= probe.size()
+		|| probe.size() - offset > kMaxFooterBytes
+		|| !probe.seek(offset)) {
+		return false;
+	}
+	const auto tail = probe.read(kMaxFooterBytes);
+	return probe.atEnd() && tail.simplified() == expected;
+}
+
 Result File::writeBlock(const QByteArray &block) {
 	const auto result = writeBlockAttempt(block);
 	if (!result) {

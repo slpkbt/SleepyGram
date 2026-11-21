@@ -2481,25 +2481,20 @@ Result JsonWriter::start(
 	_incrementalResume = false;
 	_dialogOpen = false;
 	if (_settings.onlySinglePeer()) {
-		if (_settings.incremental
-			&& _settings.incrementalState
-			&& _settings.incrementalState->jsonCloseOffset > 0) {
-			const auto offset = _settings.incrementalState->jsonCloseOffset;
-			auto probe = QFile(mainFilePath());
-			if (probe.exists()
-				&& probe.size() >= offset
-				&& probe.open(QIODevice::ReadOnly)
-				&& probe.seek(offset)) {
-				const auto tail = probe.readAll().simplified();
-				if (tail == "] }") {
-					_output->setResumeOffset(offset);
-					_context.nesting = { Context::kObject, Context::kArray };
-					_currentNestingHadItem
-						= (_settings.incrementalState->messagesCount > 0);
-					_incrementalResume = true;
-					_dialogOpen = true;
-				}
+		if (_settings.incremental) {
+			const auto &state = _settings.incrementalState;
+			const auto path = mainFilePath();
+			if (!state || !File::CheckResumeTail(
+					path,
+					state->jsonCloseOffset,
+					"] }")) {
+				return Result(Result::Type::FatalError, path);
 			}
+			_output->setResumeOffset(state->jsonCloseOffset);
+			_context.nesting = { Context::kObject, Context::kArray };
+			_currentNestingHadItem = (state->messagesCount > 0);
+			_incrementalResume = true;
+			_dialogOpen = true;
 		}
 		return Result::Success();
 	}

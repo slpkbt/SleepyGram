@@ -218,12 +218,44 @@ void ProfileSetupWindow::submit() {
 	if (_state != State::Form || Core::Quitting()) {
 		return;
 	}
+	const auto name = _setName->text().trimmed();
+	if (name.isEmpty() || name.size() > kSetNameLength) {
+		_status->setText(u"Enter a name for the first set."_q);
+		_setName->setFocus();
+		return;
+	} else if (_legacyPasscode->text().size() > kPasscodeLength
+		|| _legacyWalletPasscode->text().size() > kPasscodeLength
+		|| _masterPasscode->text().size() > kPasscodeLength
+		|| _setPasscode->text().size() > kPasscodeLength) {
+		_status->setText(u"Use passcodes of at most 1024 characters."_q);
+		return;
+	} else if (_masterPasscode->text().isEmpty() || _setPasscode->text().isEmpty()) {
+		_status->setText(u"Enter both the master passcode and the first set passcode."_q);
+		(_masterPasscode->text().isEmpty() ? _masterPasscode : _setPasscode)->setFocus();
+		return;
+	} else if (_masterPasscode->text() == _setPasscode->text()) {
+		_status->setText(u"The master and the first set must use different passcodes."_q);
+		_setPasscode->selectAll();
+		_setPasscode->setFocus();
+		return;
+	} else if (_confirmMaster->text() != _masterPasscode->text()) {
+		_status->setText(u"The master passcode confirmation does not match."_q);
+		_confirmMaster->selectAll();
+		_confirmMaster->setFocus();
+		return;
+	} else if (_confirmSet->text() != _setPasscode->text()) {
+		_status->setText(u"The first set passcode confirmation does not match."_q);
+		_confirmSet->selectAll();
+		_confirmSet->setFocus();
+		return;
+	}
+
 	auto request = ProfileSets::ProfileSetupRequest{
 		.dataDirectory = _dataDirectory,
 		.dataName = _dataName,
 		.legacyPasscode = TakeInput(*_legacyPasscode),
 		.masterPasscode = TakeInput(*_masterPasscode),
-		.firstSetName = _setName->text().trimmed(),
+		.firstSetName = name,
 		.firstSetPasscode = TakeInput(*_setPasscode),
 		.preserveLegacyWebviewStorage = _preserveLegacyWebview->isChecked(),
 		.legacyWalletPasscode = TakeInput(*_legacyWalletPasscode),
@@ -235,31 +267,8 @@ void ProfileSetupWindow::submit() {
 		request.firstSetPasscode.fill(QChar(0));
 		request.legacyWalletPasscode.fill(QChar(0));
 	});
-	auto confirmMaster = TakeInput(*_confirmMaster);
-	auto confirmSet = TakeInput(*_confirmSet);
-	const auto matches = (confirmMaster == request.masterPasscode)
-		&& (confirmSet == request.firstSetPasscode);
-	confirmMaster.fill(QChar(0));
-	confirmSet.fill(QChar(0));
-
-	if (request.firstSetName.isEmpty() || request.firstSetName.size() > kSetNameLength) {
-		_status->setText(u"Enter a name for the first set."_q);
-		_setName->setFocus();
-		return;
-	} else if (request.legacyPasscode.size() > kPasscodeLength
-		|| request.legacyWalletPasscode.size() > kPasscodeLength
-		|| request.masterPasscode.size() > kPasscodeLength
-		|| request.firstSetPasscode.size() > kPasscodeLength) {
-		_status->setText(u"Use passcodes of at most 1024 characters."_q);
-		return;
-	} else if (request.masterPasscode.isEmpty() || request.firstSetPasscode.isEmpty()
-		|| request.masterPasscode == request.firstSetPasscode) {
-		_status->setText(u"Choose two different passcodes for the master and first set."_q);
-		return;
-	} else if (!matches) {
-		_status->setText(u"Both passcode confirmations must match."_q);
-		return;
-	}
+	ClearInput(*_confirmMaster);
+	ClearInput(*_confirmSet);
 
 	_state = State::Working;
 	_form->setEnabled(false);

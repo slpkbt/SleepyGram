@@ -740,7 +740,9 @@ void ShareBox::submit(Api::SendOptions options) {
 					if (const auto strong = weak.get()) {
 						strong->_sendGuardConfirmed = true;
 						strong->submit(options);
-						strong->_sendGuardConfirmed = false;
+						if (const auto stillOpen = weak.get()) {
+							stillOpen->_sendGuardConfirmed = false;
+						}
 					}
 				});
 			return;

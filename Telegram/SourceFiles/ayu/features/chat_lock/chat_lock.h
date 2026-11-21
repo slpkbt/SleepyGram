@@ -28,15 +28,6 @@ struct Change final {
 	not_null<Main::Session*> session,
 	PeerId peerId);
 
-void SetPin(
-	not_null<Main::Session*> session,
-	QString pin,
-	Fn<void(bool)> done);
-void VerifyPin(
-	not_null<Main::Session*> session,
-	PeerId peerId,
-	QString pin,
-	Fn<void(bool)> done);
 bool SetPeerProtected(
 	not_null<Main::Session*> session,
 	PeerId peerId,
