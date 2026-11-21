@@ -39,10 +39,6 @@ on:
         description: Save native and Docker dependencies for this manual run's ref
         type: boolean
         default: false
-      windows_cache_probe:
-        description: Probe MSVC compiler cache compatibility
-        type: boolean
-        default: false
       publish_release:
         description: Publish the signed stable release from protected dev (platform all)
         required: false
@@ -737,7 +733,7 @@ jobs:
     name: windows-x64
     runs-on: windows-2022
     needs: preflight
-    if: needs.preflight.outputs.windows-x64 == 'true' && !inputs.windows_cache_probe
+    if: needs.preflight.outputs.windows-x64 == 'true'
     defaults:
       run:
         shell: pwsh
@@ -1039,60 +1035,6 @@ jobs:
             --directory release-assets --source-sha "$GITHUB_SHA" \
             --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
           python3 .github/ci/update_package.py verify --directory release-assets --keys "$keys"
-
-  probe-windows-compiler-cache:
-    name: Probe MSVC compiler caches
-    if: github.event_name == 'workflow_dispatch' && inputs.windows_cache_probe && !inputs.publish_release
-    runs-on: windows-2022
-    steps:
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-          sdk: 10.0.26100.0
-      - name: Compare native PCH with ccache and sccache
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          Set-Location $env:RUNNER_TEMP
-          Invoke-WebRequest https://github.com/ccache/ccache/releases/download/v4.14.3/ccache-4.14.3-windows-x86_64.zip -OutFile ccache.zip
-          Invoke-WebRequest https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-x86_64-pc-windows-msvc.zip -OutFile sccache.zip
-          Expand-Archive ccache.zip ccache
-          Expand-Archive sccache.zip sccache
-          $ccache = (Get-ChildItem ccache -Recurse -Filter ccache.exe | Select-Object -First 1).FullName
-          $sccache = (Get-ChildItem sccache -Recurse -Filter sccache.exe | Select-Object -First 1).FullName
-          $compiler = (Get-Command cl.exe -CommandType Application).Source
-          Set-Content pch.hpp '#include <vector>' -Encoding ascii
-          Set-Content main.cpp 'int main() { return std::vector<int>{0}.front(); }' -Encoding ascii
-          @'
-          cmake_minimum_required(VERSION 3.25)
-          project(CacheProbe LANGUAGES CXX)
-          add_executable(cache_probe main.cpp)
-          target_compile_features(cache_probe PRIVATE cxx_std_20)
-          target_precompile_headers(cache_probe PRIVATE pch.hpp)
-          '@ | Set-Content CMakeLists.txt -Encoding ascii
-
-          $env:CCACHE_DIR = Join-Path $PWD 'ccache-store'
-          $env:SCCACHE_DIR = Join-Path $PWD 'sccache-store'
-          cmake -S . -B plain-out -G 'Ninja Multi-Config' "-DCMAKE_CXX_COMPILER=$compiler" -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=
-          cmake --build plain-out --config Release
-          foreach ($wrapper in @($ccache, $sccache)) {
-            $name = [IO.Path]::GetFileNameWithoutExtension($wrapper)
-            Write-Output "Checking $name with the native x64 compiler"
-            & $wrapper --version
-            try {
-              & $wrapper --zero-stats
-              cmake -S . -B "$name-out" -G 'Ninja Multi-Config' "-DCMAKE_CXX_COMPILER=$compiler" "-DCMAKE_CXX_COMPILER_LAUNCHER=$wrapper" -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=
-              cmake --build "$name-out" --config Release
-              cmake --build "$name-out" --config Release --target clean
-              cmake --build "$name-out" --config Release
-              & ".\$name-out\Release\cache_probe.exe"
-            } catch {
-              Write-Output "Compiler probe failed for ${name}: $($_.Exception.Message)"
-            } finally {
-              & $wrapper --show-stats
-            }
-          }
 
   publish-release:
     name: Sign and publish stable release
