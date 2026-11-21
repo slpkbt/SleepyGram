@@ -23,6 +23,18 @@ on:
           - macos-15
           - macos-26
           - xcode-27
+      ci_only:
+        description: Run fast CI checks on the selected platforms
+        type: boolean
+        default: false
+      build_jobs:
+        description: Parallel compile jobs in fast CI
+        type: choice
+        default: '2'
+        options:
+          - '2'
+          - '3'
+          - '4'
       publish_release:
         description: Publish the signed stable release from protected dev (platform all)
         required: false
@@ -35,12 +47,17 @@ on:
     branches:
       - dev
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
 permissions:
   contents: read
 
 env:
   TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID || secrets.AYUGRAM_API_ID || secrets.TELEGRAM_API_ID || secrets.API_ID || '2040' }}
   TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH || secrets.AYUGRAM_API_HASH || secrets.TELEGRAM_API_HASH || secrets.API_HASH || 'b18441a1ff607e10a989891a5462e627' }}
+  FAST_CI: ${{ github.event_name != 'workflow_dispatch' || inputs.ci_only }}
   CI_QT_VERSION: 6.11.2
   CI_MACOS_MINIMUM: '12.0'
 
@@ -50,9 +67,21 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       production-update: ${{ steps.trust.outputs.production }}
+      linux-x64: ${{ steps.platforms.outputs.linux-x64 }}
+      macos-arm64: ${{ steps.platforms.outputs.macos-arm64 }}
+      windows-x64: ${{ steps.platforms.outputs.windows-x64 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Select platform checks
+        id: platforms
+        env:
+          BUILD_PLATFORM: ${{ inputs.platform }}
+        run: python3 .github/ci/select_platforms.py
+      - name: Test platform selection
+        run: python3 .github/ci/test_select_platforms.py
       - name: Check update trust and release request
         id: trust
         shell: bash
@@ -60,14 +89,15 @@ jobs:
           SLEEPYGRAM_UPDATE_PUBLIC_BUNDLE: ${{ inputs.publish_release && vars.SLEEPYGRAM_UPDATE_PUBLIC_BUNDLE || '' }}
           RELEASE_REQUESTED: ${{ inputs.publish_release }}
           RELEASE_PLATFORM: ${{ inputs.platform }}
+          RELEASE_CI_ONLY: ${{ inputs.ci_only }}
           RELEASE_REF_PROTECTED: ${{ github.ref_protected }}
         run: |
           set -euo pipefail
           args=()
           if [[ "$RELEASE_REQUESTED" == true ]]; then
             if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || "$GITHUB_REPOSITORY" != slpkbt/SleepyGram \
-              || "$GITHUB_REF" != refs/heads/dev || "$RELEASE_REF_PROTECTED" != true || "$RELEASE_PLATFORM" != all ]]; then
-              echo "::error::Publishing requires a manual dispatch on protected dev with all platforms selected."
+              || "$GITHUB_REF" != refs/heads/dev || "$RELEASE_REF_PROTECTED" != true || "$RELEASE_PLATFORM" != all || "$RELEASE_CI_ONLY" == true ]]; then
+              echo "::error::Publishing requires a manual dispatch on protected dev with all platforms selected and fast CI disabled."
               exit 1
             fi
             args+=(--require-production)
@@ -112,7 +142,7 @@ jobs:
     name: linux-x64
     runs-on: ubuntu-22.04
     needs: preflight
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'linux-macos' || inputs.platform == 'linux-x64' || inputs.platform == 'all' }}
+    if: needs.preflight.outputs.linux-x64 == 'true'
     env:
       IMAGE_TAG: sleepygram:centos_env
     steps:
@@ -175,15 +205,16 @@ jobs:
           load: true
           tags: ${{ env.IMAGE_TAG }}
           cache-from: type=local,src=${{ runner.temp }}/.buildx-cache
-          cache-to: type=local,dest=${{ runner.temp }}/.buildx-cache-new,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/dev' && steps.linux-cache.outputs.cache-hit != 'true' && format('type=local,dest={0}/.buildx-cache-new,mode=max', runner.temp) || '' }}
 
       - name: Move Docker cache
+        if: github.ref == 'refs/heads/dev' && steps.linux-cache.outputs.cache-hit != 'true'
         run: |
           rm -rf "$RUNNER_TEMP/.buildx-cache"
           mv "$RUNNER_TEMP/.buildx-cache-new" "$RUNNER_TEMP/.buildx-cache"
 
       - name: Save Docker layers
-        if: steps.linux-cache.outputs.cache-hit != 'true'
+        if: github.ref == 'refs/heads/dev' && steps.linux-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/.buildx-cache
@@ -207,12 +238,45 @@ jobs:
           SLEEPYGRAM_UPDATE_PUBLIC_BUNDLE: ${{ inputs.publish_release && vars.SLEEPYGRAM_UPDATE_PUBLIC_BUNDLE || '' }}
         run: python3 .github/ci/update_package.py trust --output "$RUNNER_TEMP/update-keys"
 
+      - name: Prepare compiler cache directory
+        id: compiler-key
+        if: env.FAST_CI == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/linux-ccache"
+          compiler="$(printf '%s' "$CI_CONTAINER_CXX" | sha256sum | cut -c1-16)"
+          echo "prefix=linux-x64-ccache-v1-${{ steps.cache-key.outputs.key }}-$compiler-" >> "$GITHUB_OUTPUT"
+          echo "period=$(date -u +%G%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Linux compiler cache
+        id: compiler-cache
+        if: env.FAST_CI == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/linux-ccache
+          key: ${{ steps.compiler-key.outputs.prefix }}${{ steps.compiler-key.outputs.period }}
+          restore-keys: ${{ steps.compiler-key.outputs.prefix }}
+
       - name: Build
         id: build
         env:
           PRODUCTION_UPDATE: ${{ needs.preflight.outputs.production-update }}
-          KEEP_GOING: "1"
+          BUILD_JOBS: ${{ inputs.build_jobs || '2' }}
+          PUBLIC_API_ID: '2040'
+          PUBLIC_API_HASH: 'b18441a1ff607e10a989891a5462e627'
         run: |
+          docker_args=(-e KEEP_GOING=1)
+          if [[ "$FAST_CI" == true ]]; then
+            TDESKTOP_API_ID="$PUBLIC_API_ID"
+            TDESKTOP_API_HASH="$PUBLIC_API_HASH"
+            docker_args=(
+              -v "$RUNNER_TEMP/linux-ccache:/var/cache/ccache"
+              -e SLEEPYGRAM_CI_CCACHE=1
+              -e CCACHE_MAXSIZE=1500M
+              -e "CMAKE_BUILD_PARALLEL_LEVEL=$BUILD_JOBS"
+            )
+            nproc
+            free -h
+          fi
           update_keys=""
           if [[ "$PRODUCTION_UPDATE" == true ]]; then
             update_keys=/update-keys
@@ -223,7 +287,7 @@ jobs:
             -v "$PWD:/usr/src/tdesktop" \
             -v "$RUNNER_TEMP/update-keys:/update-keys:ro" \
             -e CONFIG=Release \
-            -e KEEP_GOING="$KEEP_GOING" \
+            "${docker_args[@]}" \
             "$IMAGE_TAG" \
             /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
               -D CMAKE_CONFIGURATION_TYPES=Release \
@@ -235,6 +299,13 @@ jobs:
               -D TDESKTOP_BUILD_UPDATE_TESTS=ON \
               -D SLEEPYGRAM_UPDATE_KEYS_DIR="$update_keys" \
               -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
+
+      - name: Save Linux compiler cache
+        if: env.FAST_CI == 'true' && github.event_name != 'pull_request' && steps.compiler-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/linux-ccache
+          key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
 
       - name: Upload failed build logs
         if: ${{ failure() && steps.build.outcome == 'failure' }}
@@ -356,6 +427,7 @@ jobs:
               --archive /package/SleepyGram-linux-x64.tar.xz
 
       - name: Upload artifact
+        if: env.FAST_CI != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: package-linux-x64
@@ -366,137 +438,12 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
-  macos-prepare:
-    name: macos-prepare
-    runs-on: ${{ inputs.macos_runner || 'xcode-27' }}
-    timeout-minutes: 360
-    needs: preflight
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'macos-windows' || inputs.platform == 'linux-macos' || inputs.platform == 'macos-arm64' || inputs.platform == 'all' }}
-    outputs:
-      cache-key: ${{ steps.cache-key.outputs.key }}
-      artifact-name: ${{ steps.archive-deps.outputs.name }}
-    env:
-      TDESKTOP_API_ID: ""
-      TDESKTOP_API_HASH: ""
-    steps:
-      - name: Verify Apple Silicon runner
-        run: |
-          if [ "$(uname -m)" != "arm64" ]; then
-            echo "::error::macOS runner must be arm64, got $(uname -m)"
-            exit 1
-          fi
-
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          path: tdesktop
-
-      - name: Sync AyuGram submodules
-        run: python3 tdesktop/Telegram/build/sync_ayu_submodules.py
-
-      - name: Install tools
-        run: |
-          sudo chown -R "$(whoami):admin" /usr/local/share || true
-          brew update
-          brew install automake cmake gnu-tar libtool meson nasm ninja pkg-config wget
-          sudo mdutil -a -i off || true
-          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-          sudo sed -i '' '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/ -g//' /opt/homebrew/share/cmake/Modules/Compiler/GNU.cmake || true
-
-      - name: Test macOS permission wrapper
-        run: python3 tdesktop/tools/tests/test_mac_permissions.py
-
-      - name: Cache key inputs
-        id: cache-key
-        run: python3 tdesktop/.github/ci/build_artifact.py cache-key --platform macos-arm64 --repo-root tdesktop
-
-      - name: Cache libraries
-        id: mac-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            Libraries
-            ThirdParty
-          key: macos-arm64-libraries-v2-${{ steps.cache-key.outputs.key }}
-          restore-keys: macos-arm64-libraries-v2-
-
-      - name: Prepare libraries
-        id: prepare
-        if: steps.mac-cache.outputs.cache-hit != 'true'
-        env:
-          QT: ${{ env.CI_QT_VERSION }}
-          SLEEPYGRAM_MAC_TG_OWT_ARM64_RELEASE: "1"
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-            AUTH_B64="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
-            export GIT_CONFIG_COUNT=1
-            export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
-            export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${AUTH_B64}"
-          fi
-          python3 tdesktop/.github/ci/build_diagnostics.py --log-file "$RUNNER_TEMP/macos-arm64-prepare.log" -- bash ./tdesktop/Telegram/build/prepare/mac.sh silent
-
-      - name: Prune macOS Qt build sources
-        id: mac-qt-prune
-        if: ${{ steps.prepare.outcome != 'failure' }}
-        continue-on-error: true
-        run: python3 tdesktop/.github/ci/prune_macos_qt_sources.py --libraries Libraries --qt-version "$CI_QT_VERSION"
-
-      - name: Report compact dependency footprint
-        if: ${{ always() && steps.prepare.outcome == 'success' }}
-        continue-on-error: true
-        run: |
-          echo "Dependency cache footprint before save (uncompressed):"
-          du -sh Libraries ThirdParty
-
-      - name: Save macOS dependencies
-        if: steps.mac-cache.outputs.cache-hit != 'true' && steps.mac-qt-prune.outcome == 'success'
-        continue-on-error: true
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            Libraries
-            ThirdParty
-          key: macos-arm64-libraries-v2-${{ steps.cache-key.outputs.key }}
-
-      - name: Archive cold macOS dependencies
-        id: archive-deps
-        if: ${{ steps.mac-cache.outputs.cache-hit != 'true' && steps.prepare.outcome == 'success' && steps.mac-qt-prune.outcome == 'success' }}
-        continue-on-error: true
-        run: |
-          echo "name=macos-arm64-dependencies-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
-          gtar --use-compress-program='gzip -1' -cf "$RUNNER_TEMP/macos-arm64-dependencies.tar.gz" Libraries ThirdParty
-
-      - name: Upload cold macOS dependencies
-        id: upload-deps
-        if: ${{ steps.archive-deps.outcome == 'success' }}
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.archive-deps.outputs.name }}
-          path: ${{ runner.temp }}/macos-arm64-dependencies.tar.gz
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
-
-      - name: Upload dependency preparation diagnostics
-        if: ${{ failure() && steps.prepare.outcome == 'failure' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: diagnostics-macos-arm64-prepare-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/macos-arm64-prepare.log
-          if-no-files-found: ignore
-
   macos-arm64:
     name: macos-arm64
     runs-on: ${{ inputs.macos_runner || 'xcode-27' }}
     timeout-minutes: 360
-    needs:
-      - preflight
-      - macos-prepare
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'macos-windows' || inputs.platform == 'linux-macos' || inputs.platform == 'macos-arm64' || inputs.platform == 'all' }}
+    needs: preflight
+    if: needs.preflight.outputs.macos-arm64 == 'true'
     steps:
       - name: Verify Apple Silicon runner
         run: |
@@ -525,7 +472,7 @@ jobs:
         run: |
           sudo chown -R "$(whoami):admin" /usr/local/share || true
           brew update
-          brew install automake cmake gnu-tar libtool meson nasm ninja pkg-config wget
+          brew install automake cmake libtool meson nasm ninja pkg-config wget
           sudo mdutil -a -i off || true
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
           sudo sed -i '' '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/ -g//' /opt/homebrew/share/cmake/Modules/Compiler/GNU.cmake || true
@@ -544,41 +491,29 @@ jobs:
           path: |
             Libraries
             ThirdParty
-          key: macos-arm64-libraries-v2-${{ steps.cache-key.outputs.key }}
+          key: macos-arm64-libraries-v3-${{ steps.cache-key.outputs.key }}
 
-      - name: Download cold macOS dependencies
-        id: download-deps
-        if: ${{ steps.mac-cache.outputs.cache-hit != 'true' && needs.macos-prepare.outputs.cache-key == steps.cache-key.outputs.key && needs.macos-prepare.outputs.artifact-name != '' }}
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.macos-prepare.outputs.artifact-name }}
-          path: ${{ runner.temp }}/macos-arm64-dependencies
-
-      - name: Restore cold macOS dependencies
-        id: restore-cold-deps
-        if: ${{ steps.download-deps.outcome == 'success' }}
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          archive="$RUNNER_TEMP/macos-arm64-dependencies/macos-arm64-dependencies.tar.gz"
-          trap 'rm -f "$archive"' EXIT
-          gtar -xzf "$archive"
-          test -d Libraries
-          test -d ThirdParty
-
-      - name: Prepare libraries after cache or artifact miss
-        id: prepare-fallback
-        if: ${{ steps.mac-cache.outputs.cache-hit != 'true' && steps.restore-cold-deps.outcome != 'success' }}
+      - name: Prepare libraries
+        id: prepare
+        if: steps.mac-cache.outputs.cache-hit != 'true'
         env:
           QT: ${{ env.CI_QT_VERSION }}
           SLEEPYGRAM_MAC_TG_OWT_ARM64_RELEASE: "1"
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          rm -rf Libraries ThirdParty
+          set -euo pipefail
+          if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+            AUTH_B64="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+            echo "::add-mask::$AUTH_B64"
+            export GIT_CONFIG_COUNT=1
+            export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+            export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${AUTH_B64}"
+          fi
           python3 tdesktop/.github/ci/build_diagnostics.py --log-file "$RUNNER_TEMP/macos-arm64-prepare.log" -- bash ./tdesktop/Telegram/build/prepare/mac.sh silent
 
       - name: Prune macOS Qt build sources
         id: mac-qt-prune
+        if: steps.prepare.outcome == 'success'
         continue-on-error: true
         run: python3 tdesktop/.github/ci/prune_macos_qt_sources.py --libraries Libraries --qt-version "$CI_QT_VERSION"
 
@@ -586,6 +521,20 @@ jobs:
         id: cleanup-libraries
         run: |
           find Libraries '(' '(' ! '(' -name '*.a' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -name '*.pc' -o -path '*/include/*' -o -path 'Libraries/local/src/wallet_engine/wallet_engine.cpp' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -perm +111 ')' -type f ')' -o -empty ')' -delete
+
+      - name: Report macOS dependency cache
+        run: |
+          echo "Exact cache hit: ${{ steps.mac-cache.outputs.cache-hit }}"
+          du -sh Libraries ThirdParty
+
+      - name: Save macOS dependencies
+        if: github.ref == 'refs/heads/dev' && steps.prepare.outcome == 'success' && steps.mac-qt-prune.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            Libraries
+            ThirdParty
+          key: macos-arm64-libraries-v3-${{ steps.cache-key.outputs.key }}
 
       - name: Prepare public update trust
         env:
@@ -640,10 +589,15 @@ jobs:
         working-directory: tdesktop
         env:
           QT: ${{ env.CI_QT_VERSION }}
+          BUILD_JOBS: ${{ inputs.build_jobs || '2' }}
         run: |
+          flags=(--parallel 2 -- -k 0)
+          if [[ "$FAST_CI" == true ]]; then
+            flags=(--parallel "$BUILD_JOBS")
+          fi
           python3 .github/ci/build_diagnostics.py \
             --log-file "$RUNNER_TEMP/macos-arm64-build.log" -- \
-            cmake --build out --config Release --parallel 2 -- -k 0
+            cmake --build out --config Release "${flags[@]}"
 
       - name: Redact CMake configure details
         if: ${{ failure() && (steps.configure.outcome == 'failure' || steps.build.outcome == 'failure') }}
@@ -656,7 +610,7 @@ jobs:
           fi
 
       - name: Upload failed build logs
-        if: ${{ failure() && (steps.prepare-fallback.outcome == 'failure' || steps.mac-qt-prune.outcome == 'failure' || steps.cleanup-libraries.outcome == 'failure' || steps.configure.outcome == 'failure' || steps.build.outcome == 'failure') }}
+        if: ${{ failure() && (steps.prepare.outcome == 'failure' || steps.mac-qt-prune.outcome == 'failure' || steps.cleanup-libraries.outcome == 'failure' || steps.configure.outcome == 'failure' || steps.build.outcome == 'failure') }}
         uses: actions/upload-artifact@v4
         with:
           name: diagnostics-macos-arm64-${{ github.run_id }}-${{ github.run_attempt }}
@@ -754,6 +708,7 @@ jobs:
             --archive "$RUNNER_TEMP/SleepyGram-macos-arm64.zip"
 
       - name: Upload artifact
+        if: env.FAST_CI != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: package-macos-arm64
@@ -770,7 +725,7 @@ jobs:
     name: windows-x64
     runs-on: windows-2022
     needs: preflight
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'macos-windows' || inputs.platform == 'windows-x64' || inputs.platform == 'all' }}
+    if: needs.preflight.outputs.windows-x64 == 'true'
     defaults:
       run:
         shell: pwsh
@@ -887,14 +842,14 @@ jobs:
         run: python "$env:REPO_PATH\.github\ci\prune_windows_qt_sources.py" --libraries "$env:LIBRARIES_PATH" --qt-version "$env:CI_QT_VERSION"
 
       - name: Save Windows build tools
-        if: steps.windows-third-party-cache.outputs.cache-hit != 'true'
+        if: github.ref == 'refs/heads/dev' && steps.windows-third-party-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: TBuild\ThirdParty
           key: windows-x64-third-party-${{ env.TBUILD_VOLUME }}-${{ steps.cache-key.outputs.key }}
 
       - name: Save Windows libraries
-        if: steps.windows-libraries-cache.outputs.cache-hit != 'true'
+        if: github.ref == 'refs/heads/dev' && steps.windows-libraries-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: TBuild\Libraries\win64
@@ -955,10 +910,13 @@ jobs:
 
       - name: Build
         id: build
+        env:
+          BUILD_JOBS: ${{ inputs.build_jobs || '2' }}
         run: |
+          $flags = if ($env:FAST_CI -eq 'true') { @('--parallel', $env:BUILD_JOBS) } else { @('--parallel', '2', '--', '-k', '0') }
           python "$env:REPO_PATH\.github\ci\build_diagnostics.py" `
             --log-file "$env:RUNNER_TEMP\windows-x64-build.log" -- `
-            cmake --build "$env:REPO_PATH\out" --config Release --parallel 2 -- -k 0
+            cmake --build "$env:REPO_PATH\out" --config Release @flags
           exit $LASTEXITCODE
 
       - name: Upload failed build logs
@@ -1037,6 +995,7 @@ jobs:
           exit $LASTEXITCODE
 
       - name: Upload artifact
+        if: env.FAST_CI != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: package-windows-x64
@@ -1047,6 +1006,28 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+  verify-manual-artifacts:
+    name: Verify all manual build artifacts
+    runs-on: ubuntu-22.04
+    needs: [linux-x64, macos-arm64, windows-x64]
+    if: github.event_name == 'workflow_dispatch' && inputs.platform == 'all' && !inputs.ci_only && !inputs.publish_release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: release-assets
+      - name: Verify artifact source, version, and update bytes
+        run: |
+          keys="$RUNNER_TEMP/update-keys"
+          python3 .github/ci/update_package.py trust --output "$keys"
+          python3 .github/ci/build_artifact.py verify-release \
+            --directory release-assets --source-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+          python3 .github/ci/update_package.py verify --directory release-assets --keys "$keys"
+
   publish-release:
     name: Sign and publish stable release
     runs-on: ubuntu-24.04
@@ -1056,7 +1037,7 @@ jobs:
       - macos-arm64
       - windows-x64
     if: >-
-      github.event_name == 'workflow_dispatch' && inputs.publish_release && inputs.platform == 'all'
+      github.event_name == 'workflow_dispatch' && inputs.publish_release && !inputs.ci_only && inputs.platform == 'all'
       && github.repository == 'slpkbt/SleepyGram' && github.ref == 'refs/heads/dev' && github.ref_protected
       && needs.preflight.outputs.production-update == 'true'
     permissions:

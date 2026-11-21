@@ -410,7 +410,13 @@ def cache_key(args: argparse.Namespace) -> None:
         digest.update(submodule_tree_fingerprint(repo_root).encode())
     tool_versions = ["cmake --version", "ninja --version"]
     if args.platform == "macos-arm64":
-        tool_versions += ["clang++ --version", "xcodebuild -version", "xcrun --show-sdk-version"]
+        digest.update(os.environ.get("CI_MACOS_MINIMUM", "").encode())
+        tool_versions += [
+            "xcrun --sdk macosx clang++ --version",
+            "xcodebuild -version",
+            "xcrun --sdk macosx --show-sdk-version",
+            "xcrun --sdk macosx --show-sdk-build-version",
+        ]
     elif args.platform == "windows-x64":
         tool_versions += ["cl /Bv", "where cmake"]
     else:
