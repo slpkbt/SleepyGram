@@ -17,7 +17,7 @@ from unittest.mock import patch
 import zipfile
 
 from build_artifact import MACOS_INSTALLER, PLATFORMS
-from update_package import TARGETS, TEST_TRUST_DIR, TRUST_FILES, asset_name, pack, stable_version, trust_bundle, verify_candidate
+from update_package import TARGETS, TEST_TRUST_DIR, TRUST_FILES, asset_name, pack, stable_version, trust_bundle, unpack, verify_candidate
 from update_release import check_release_version, check_uploaded_assets, publish, sign, stable_key_id
 
 
@@ -25,6 +25,32 @@ REPO = Path(__file__).resolve().parents[2]
 KEYS = REPO / TEST_TRUST_DIR
 TEST_KEY = REPO / "tools/tests/fixtures/sleepygram-update-leaf.pem"
 PACKER = None
+WINDOWS_FIXTURE_VERSION = 7000001
+INVENTORY_TEST_CONTENT = (b"file contents" * (2 ** 18)) + b"!"
+
+# Markerless Windows SDK output for the serialized Updater.exe and version above.
+# Python's raw LZMA encoder always emits an end marker, unlike the Windows Packer.
+WINDOWS_INVENTORY_PREFIX = (
+    "XgAAAAQrADQAAAAbmtUNUkiK3RxrAMVZjInsvliikJbWQdgWxV85+SK3FTl5lSkvRql3EkGMOCD"
+    "dLEhP61W6Sxnjtp2jgcs6S04p756iPUqze2T3mLMGzcnhHRhplk55HhzYtYz0qaIxOa7GWMegYZ"
+    "C9A+lHC8AUZj7rGHYN3z3aJGRg+2nvR80Dp7TMoJLaVsnMvdnoiq2XLf8u65odus6xJxhcWYbpZ"
+    "lJYvul2rFnk5VsFCPnH2q38+1IrdM0eWyBC+d1TPfgpZAk7gMsqbN+1O/DEvS5fqg8+S2ZCkBMO"
+    "/xCT+HF4WfgLzf+VKEYPqfx83vuaMC5WwI+F84OBwGXEJVP49ZE2MQWlsO5vwXBNRwzRkRGqrWA"
+    "dus6xJxhcWYbpZlJYvul2rFnk5VsFCPnH2q38+1IrdM0eWyBC+d1TPfgpZAk7gMsqbN+1O/DEvS"
+    "5fqg8+S2ZCkBMO/xCT+HF4WfgLzf+VKEYPqfx83vuaMC5WwI+F84OBwGXEJVP49ZE2MQWlsO5vw"
+    "XBNRwzRkRGqrWAdus6xJxhcWYbpZlJYvul2rFnk5VsFCPnH2q38+1IrdM0eWyBC+d1TPfgpZAk7"
+    "gMsqbN+1O/DEvS5fqg8+S2ZCkBMO/xCT+HF4WfgLzf+VKEYPqfx83vuaMC5WwI+F84OBwGXEJVP"
+    "49ZE2MQWlsO5vwXBNRwzRkRGqrWAdus6xJxhcWYbpZlJYvul2rFnk5VsFCPnH2q38+1IrdM0eWy"
+    "BC+d1TPfgpZAk7gMsqbN+1O/DEvS5fqg8+S2ZCkBMO/xCT+HF1"
+)
+WINDOWS_FIXTURE_PAYLOADS = {
+    INVENTORY_TEST_CONTENT: WINDOWS_INVENTORY_PREFIX + "etcAwAA=",
+    INVENTORY_TEST_CONTENT[:-1] + b"?": WINDOWS_INVENTORY_PREFIX + "fEDeDAA=",
+    b"fixture updater": (
+        "XgAAAAQ5AAAAAAAbmtUNUkiK3RxrAMVZjInsvliikJbWQdgW1zbsOfERhNoQQ6ZJC99qG5318pg"
+        "rsAA="
+    ),
+}
 
 
 def make_archive(directory, platform, name, content):
@@ -51,8 +77,9 @@ def make_candidate(directory, platform, version, content, override_os=None):
     inner = struct.pack(">III", version, 1, len(filename)) + filename
     inner += struct.pack(">II", len(content), len(content)) + content
     if platform == "windows-x64":
-        filters = [{"id": lzma.FILTER_LZMA1, "dict_size": 4096, "lc": 4, "lp": 0, "pb": 2}]
-        payload = struct.pack("<BII", 94, 4096, len(inner)) + lzma.compress(inner, format=lzma.FORMAT_RAW, filters=filters)
+        if version != WINDOWS_FIXTURE_VERSION:
+            raise ValueError("Synthetic Windows payload requires the fixed fixture version.")
+        payload = base64.b64decode(WINDOWS_FIXTURE_PAYLOADS[content], validate=True)
     else:
         inner += b"\x01"
         payload = struct.pack("<I", len(inner)) + lzma.compress(inner)
@@ -84,10 +111,11 @@ class SignedUpdateTests(unittest.TestCase):
         self.assertEqual(stable_key_id(KEYS, TEST_KEY), "sleepygram-ci-fixture")
 
     def test_same_platform_and_inventory(self):
-        _, version = stable_version(REPO)
+        _, stable = stable_version(REPO)
         for platform, (os_id, _, _, _, updater) in TARGETS.items():
             with self.subTest(platform=platform):
-                content = (b"file contents" * (2 ** 18)) + b"!"
+                version = WINDOWS_FIXTURE_VERSION if platform == "windows-x64" else stable
+                content = INVENTORY_TEST_CONTENT
                 archive = make_archive(self.output, platform, updater, content)
                 make_candidate(self.output, platform, version, content)
                 verify_candidate(self.output, platform, version, KEYS, archive)
@@ -101,6 +129,21 @@ class SignedUpdateTests(unittest.TestCase):
                 signing.write_bytes(signing.read_bytes()[:-1] + b"?")
                 with self.assertRaisesRegex(ValueError, "Incorrect TDUP signing input"):
                     verify_candidate(self.output, platform, version, KEYS, archive)
+
+    def test_windows_sdk_stream_without_end_marker(self):
+        # desktop-app/lzma's LzmaCompress output, using the Packer settings.
+        payload = bytes.fromhex(
+            "5e00000004350000000000088a2d6541ae4175fb980b0f51993f707eb414b9df0"
+            "19ddfb2d773b872e42b336265c180f8cbb7b70be159517c4fdd34f0fa7005fb1787df6bdf1a00"
+        )
+        content = bytes((i * 31) & 255 for i in range(53))
+        out = io.BytesIO()
+        unpack(io.BytesIO(payload), "windows-x64", out)
+        self.assertEqual(out.read(), content)
+        with self.assertRaisesRegex(ValueError, "Incomplete compressed update data"):
+            unpack(io.BytesIO(payload[:-1]), "windows-x64", io.BytesIO())
+        with self.assertRaisesRegex(ValueError, "Invalid TDUP compressed payload size"):
+            unpack(io.BytesIO(payload + b"x"), "windows-x64", io.BytesIO())
 
     def test_release_version_and_upload(self):
         old = {"tag_name": "v7.9.0", "draft": False, "prerelease": False}
@@ -183,7 +226,8 @@ class SignedUpdateTests(unittest.TestCase):
                 pack(argparse.Namespace(repo_root=REPO, platform=platform, keys=KEYS, packer=PACKER,
                                         stage=stage, output=directory, archive=archive))
             else:
-                make_candidate(directory, platform, version, content)
+                fixture_version = WINDOWS_FIXTURE_VERSION if platform == "windows-x64" else version
+                make_candidate(directory, platform, fixture_version, content)
         args = argparse.Namespace(directory=self.output, keys=KEYS, packer=PACKER)
         with patch.dict(os.environ, {"SLEEPYGRAM_UPDATE_STABLE_KEY_PEM": TEST_KEY.read_text()}):
             sign(args)

@@ -701,11 +701,26 @@ void Filler::addChatPinPolicy() {
 	}
 	const auto session = &history->session();
 	const auto peerId = history->peer->id;
+	// The menu handlers outlive this Filler.
+	const auto resolveController = [
+		weakController = base::make_weak(_controller),
+		weakSession = base::make_weak(session)
+	]() -> SessionController* {
+		const auto controller = weakController.get();
+		const auto session = weakSession.get();
+		return (controller && session && &controller->session() == session)
+			? controller
+			: nullptr;
+	};
 	const auto protectedChat = Ayu::ChatLock::IsPeerProtected(session, peerId);
 	if (!Ayu::ChatLock::HasPin(session) || !protectedChat) {
 		_addAction(
 			tr::lng_ayu_chat_pin_protect(tr::now),
-			[=] { Ayu::ChatLock::ShowProtectDialog(_controller, peerId); },
+			[resolveController, peerId] {
+				if (const auto controller = resolveController()) {
+					Ayu::ChatLock::ShowProtectDialog(controller, peerId);
+				}
+			},
 			&st::menuIconLock);
 		return;
 	}
@@ -713,21 +728,41 @@ void Filler::addChatPinPolicy() {
 	_addAction(PeerMenuCallback::Args{
 		.text = tr::lng_ayu_chat_pin(tr::now),
 		.handler = nullptr,
-		.fillSubmenu = [=](not_null<Ui::PopupMenu*> menu) {
-			menu->addAction(tr::lng_ayu_chat_pin_lock_all(tr::now), [=] {
-				Ayu::ChatLock::LockAccount(session->userId().bare);
-			});
+		.fillSubmenu = [resolveController, peerId, locked](
+				not_null<Ui::PopupMenu*> menu) {
+			menu->addAction(
+				tr::lng_ayu_chat_pin_lock_all(tr::now),
+				[resolveController] {
+					if (const auto controller = resolveController()) {
+						Ayu::ChatLock::LockAccount(controller->session().userId().bare);
+					}
+				});
 			if (locked) {
-				menu->addAction(tr::lng_ayu_chat_pin_unlock(tr::now), [=] {
-					Ayu::ChatLock::ShowUnlockDialog(_controller, peerId);
-				});
+				menu->addAction(
+					tr::lng_ayu_chat_pin_unlock(tr::now),
+					[resolveController, peerId] {
+						if (const auto controller = resolveController()) {
+							Ayu::ChatLock::ShowUnlockDialog(controller, peerId);
+						}
+					});
 			} else {
-				menu->addAction(tr::lng_ayu_chat_pin_lock(tr::now), [=] {
-					Ayu::ChatLock::LockPeer(session->userId().bare, peerId);
-				});
-				menu->addAction(tr::lng_ayu_chat_pin_remove(tr::now), [=] {
-					Ayu::ChatLock::SetPeerProtected(session, peerId, false);
-				});
+				menu->addAction(
+					tr::lng_ayu_chat_pin_lock(tr::now),
+					[resolveController, peerId] {
+						if (const auto controller = resolveController()) {
+							Ayu::ChatLock::LockPeer(controller->session().userId().bare, peerId);
+						}
+					});
+				menu->addAction(
+					tr::lng_ayu_chat_pin_remove(tr::now),
+					[resolveController, peerId] {
+						if (const auto controller = resolveController()) {
+							Ayu::ChatLock::SetPeerProtected(
+								&controller->session(),
+								peerId,
+								false);
+						}
+					});
 			}
 		},
 	});

@@ -167,25 +167,25 @@ def package_inventory(archive: Path, platform: str) -> dict[str, tuple]:
     return inventory
 
 
-def decompressor(stream, platform: str):
-    if platform != "windows-x64":
-        return lzma.LZMADecompressor(format=lzma.FORMAT_XZ, memlimit=MAX_UNPACKED)
-    codec, dictionary = struct.unpack("<BI", read_exact(stream, 5))
-    lc = codec % 9
-    lp = (codec // 9) % 5
-    pb = codec // 45
-    if not 4096 <= dictionary <= 64 * 1024 * 1024 or (lc, lp, pb) != (4, 0, 2):
-        raise ValueError("Unexpected Windows LZMA properties.")
-    return lzma.LZMADecompressor(format=lzma.FORMAT_RAW, filters=[{
-        "id": lzma.FILTER_LZMA1, "dict_size": dictionary, "lc": lc, "lp": lp, "pb": pb,
-    }])
-
-
 def unpack(stream, platform: str, output) -> None:
-    decoder = decompressor(stream, platform)
+    windows = platform == "windows-x64"
+    properties = read_exact(stream, 5) if windows else b""
     remaining = integer(stream, "<I")
     if not 0 < remaining <= MAX_UNPACKED:
         raise ValueError("The TDUP payload exceeds the updater's size limits.")
+    if windows:
+        codec, dictionary = struct.unpack("<BI", properties)
+        lc = codec % 9
+        lp = (codec // 9) % 5
+        pb = codec // 45
+        if not 4096 <= dictionary <= 64 * 1024 * 1024 or (lc, lp, pb) != (4, 0, 2):
+            raise ValueError("Unexpected Windows LZMA properties.")
+        # The SDK's LzmaCompress omits an end marker. Feed liblzma a
+        # size-aware LZMA-Alone header without changing the TDUP wire format.
+        decoder = lzma.LZMADecompressor(format=lzma.FORMAT_ALONE, memlimit=MAX_UNPACKED)
+        decoder.decompress(properties + struct.pack("<Q", remaining))
+    else:
+        decoder = lzma.LZMADecompressor(format=lzma.FORMAT_XZ, memlimit=MAX_UNPACKED)
     while chunk := stream.read(BLOCK_SIZE):
         while True:
             if decoder.eof:
@@ -198,7 +198,7 @@ def unpack(stream, platform: str, output) -> None:
             if decoder.eof or decoder.needs_input:
                 break
             chunk = b""
-    if remaining or (not decoder.eof and platform != "windows-x64"):
+    if remaining or not decoder.eof:
         raise ValueError("Incomplete compressed update data.")
     output.seek(0)
 
