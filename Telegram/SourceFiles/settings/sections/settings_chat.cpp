@@ -1010,7 +1010,7 @@ void BuildMessagesSection(SectionBuilder &builder) {
 			.keywords = { u"code"_q, u"monospace"_q, u"copy"_q, u"click"_q },
 			.checkIcon = Core::App().settings().readPref<bool>(
 				Core::kCopyMonospaceOnClickKey,
-				false)
+				Core::kCopyMonospaceOnClickDefault)
 				? SearchEntryCheckIcon::Checked
 				: SearchEntryCheckIcon::Unchecked,
 		};
@@ -1600,7 +1600,7 @@ void SetupMessages(
 			tr::lng_settings_copy_monospace_on_click(tr::now),
 			Core::App().settings().readPref<bool>(
 				Core::kCopyMonospaceOnClickKey,
-				false),
+				Core::kCopyMonospaceOnClickDefault),
 			st::settingsCheckbox),
 		st::settingsCheckboxPadding);
 	copyMonospace->checkedChanges(

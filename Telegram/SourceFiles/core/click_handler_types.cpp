@@ -884,7 +884,7 @@ void MonospaceClickHandler::onClick(ClickContext context) const {
 	}
 	if (!Core::App().settings().readPref<bool>(
 			Core::kCopyMonospaceOnClickKey,
-			false)) {
+			Core::kCopyMonospaceOnClickDefault)) {
 		return;
 	}
 	const auto my = context.other.value<ClickHandlerContext>();

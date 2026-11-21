@@ -734,8 +734,12 @@ jobs:
           mkdir -p "$extracted"
           ditto -x -k "$RUNNER_TEMP/SleepyGram-macos-arm64.zip" "$extracted"
           codesign --verify --deep --strict "$extracted/SleepyGram.app"
+          version="$(sed -nE 's/^[[:space:]]*constexpr auto AppVersion = ([0-9]+);.*/\1/p' \
+            tdesktop/Telegram/SourceFiles/core/version.h)"
+          test -n "$version"
           python3 tdesktop/.github/ci/smoke.py --platform macos-arm64 \
-            --directory "$extracted" --qpa-platform cocoa --require-startup
+            --directory "$extracted" --qpa-platform cocoa --require-startup \
+            --macos-update-probe-version "$version"
           rm -rf "$extracted"
 
       - name: Create and verify macOS installer

@@ -1588,7 +1588,7 @@ MarkdownArticleHitTestResult MarkdownDocumentWidget::dragActionFinish(
 			}
 			if (monospace && Core::App().settings().readPref<bool>(
 					Core::kCopyMonospaceOnClickKey,
-					false)) {
+					Core::kCopyMonospaceOnClickDefault)) {
 				showToast(tr::lng_code_copied(tr::now));
 			}
 			auto context = ClickContext();

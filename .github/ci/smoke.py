@@ -8,9 +8,11 @@ import os
 from pathlib import Path
 import plistlib
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
+import time
 
 
 WAIT_SECONDS = 8
@@ -119,21 +121,91 @@ def stop_tree(process: subprocess.Popen[bytes]) -> None:
             pass
 
 
+def mac_update_probe(
+    app: Path, executable: Path, profile: Path, environment: dict[str, str], version: int
+) -> None:
+    """Exercise the real packaged cocoa binary's updater handshake."""
+    if environment["QT_QPA_PLATFORM"] != "cocoa":
+        raise RuntimeError("The native macOS probe requires the cocoa platform.")
+    state = app.parent / ".sleepy-update"
+    journal = state / "transaction"
+    state.mkdir(mode=0o700)
+    try:
+        journal.mkdir(mode=0o700)
+        identity = app.stat()
+        # QDataStream Qt_5_1: magic, workDir, key, device, inode, three
+        # file masks and Prepared phase. No package or installed app is mutated.
+        path = str(profile).encode("utf-16-be")
+        (journal / "journal").write_bytes(
+            struct.pack(">II", 0x53475531, len(path))
+            + path
+            + struct.pack(">IQQIIIB", 0, identity.st_dev, identity.st_ino, 0, 0, 0, 1)
+        )
+        log = profile.parent / "update-probe.log"
+        with log.open("wb") as output:
+            process = subprocess.Popen(
+                [
+                    str(executable), "-workdir", str(profile), "-sleepy-update-probe",
+                    str(journal), "--sleepy-update-expected-version", str(version),
+                ],
+                cwd=profile,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            try:
+                deadline = time.monotonic() + 60
+                ready = journal / "ready"
+                while not ready.is_file():
+                    if process.poll() is not None:
+                        raise RuntimeError(f"Packaged macOS update probe exited early: {process.returncode}.")
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("Packaged macOS update probe did not report readiness.")
+                    time.sleep(0.05)
+                if ready.read_bytes() != b"1":
+                    raise RuntimeError("Packaged macOS update probe reported invalid readiness.")
+                (journal / "commit").write_bytes(b"commit")
+                if process.wait(timeout=15) != 0 or (journal / "released").read_bytes() != b"1":
+                    raise RuntimeError("Packaged macOS update probe did not complete the handshake.")
+            except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
+                diagnostic = early_qt_diagnostic(log, "cocoa", False)
+                raise RuntimeError(str(error) + (f" {diagnostic}" if diagnostic else "")) from error
+            finally:
+                stop_tree(process)
+                process.wait(timeout=5)
+        print("Packaged macOS update probe reached readiness and completed the handshake.")
+    finally:
+        for name in ("released", "commit", "ready", "journal"):
+            (journal / name).unlink(missing_ok=True)
+        if journal.is_dir():
+            journal.rmdir()
+        state.rmdir()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=NATIVE_QPA, required=True)
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--qpa-platform", help="Override the platform-native Qt backend.")
     parser.add_argument("--require-startup", action="store_true")
+    parser.add_argument("--macos-update-probe-version", type=int)
     args = parser.parse_args(argv)
+    if args.macos_update_probe_version is not None and args.platform != "macos-arm64":
+        parser.error("--macos-update-probe-version is only supported for macos-arm64.")
     qpa_platform = args.qpa_platform or NATIVE_QPA[args.platform]
     package = args.directory.resolve()
 
     with tempfile.TemporaryDirectory(prefix="sleepygram-smoke-") as temporary:
-        root = Path(temporary)
+        root = Path(temporary).resolve()
         if args.platform == "macos-arm64":
             app = package / "SleepyGram.app"
             info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+            if (number := args.macos_update_probe_version) is not None:
+                version = f"{number // 1_000_000}.{number // 1000 % 1000}.{number % 1000}"
+                if any(info.get(key) != version for key in ("CFBundleVersion", "CFBundleShortVersionString")):
+                    raise RuntimeError(f"The macOS bundle version must match the updater target {version}.")
             name = info.get("CFBundleExecutable")
             if not isinstance(name, str) or Path(name).name != name:
                 raise RuntimeError("Invalid CFBundleExecutable in smoke bundle.")
@@ -149,6 +221,8 @@ def main(argv: list[str] | None = None) -> int:
 
         log = root / "smoke.log"
         environment = sanitized_environment(root, qpa_platform)
+        if args.macos_update_probe_version is not None:
+            mac_update_probe(app, executable, profile, environment, args.macos_update_probe_version)
         with log.open("wb") as output:
             process = subprocess.Popen(
                 [str(executable), "-workdir", str(profile)],

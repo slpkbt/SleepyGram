@@ -1,0 +1,22 @@
+name: Rehearse published macOS update
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - .github/ci/rehearse_published_macos_update.py
+      - .github/workflows/rehearse-published-macos-update.yml
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: xcode-27
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 .github/ci/rehearse_published_macos_update.py

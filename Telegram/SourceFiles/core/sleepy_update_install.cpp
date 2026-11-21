@@ -796,7 +796,10 @@ HelperDirectoryCleanup::~HelperDirectoryCleanup() {
 	return Join(location.stage, kBundleName);
 }
 
-[[nodiscard]] bool CheckBundle(const QString &bundle, bool flush) {
+[[nodiscard]] bool CheckBundle(
+		const QString &bundle,
+		bool staged,
+		QString &error) {
 	struct stat root = {};
 	if (lstat(QFile::encodeName(bundle).constData(), &root) != 0
 		|| !S_ISDIR(root.st_mode)
@@ -805,7 +808,9 @@ HelperDirectoryCleanup::~HelperDirectoryCleanup() {
 		|| !QFileInfo(Join(bundle, kExecutableName)).isExecutable()
 		|| PathKind(Join(bundle, kUpdaterName)) != Kind::File
 		|| !QFileInfo(Join(bundle, kUpdaterName)).isExecutable()) {
-		return false;
+		return Fail(error, staged
+			? "The staged macOS bundle layout is invalid."
+			: "The installed macOS bundle layout is invalid.");
 	}
 	auto directories = QStringList{ bundle };
 	auto entries = QDirIterator(
@@ -819,19 +824,23 @@ HelperDirectoryCleanup::~HelperDirectoryCleanup() {
 			|| info.st_dev != root.st_dev
 			|| (info.st_mode & (S_IWGRP | S_IWOTH))
 			|| QFileInfo(path).fileName().compare(u"tdata", Qt::CaseInsensitive) == 0) {
-			return false;
+			return Fail(error, staged
+				? "The staged macOS bundle has an unsafe file or directory."
+				: "The installed macOS bundle has an unsafe file or directory.");
 		} else if (S_ISDIR(info.st_mode)) {
 			directories.push_back(path);
-		} else if (!S_ISREG(info.st_mode)
-			|| info.st_nlink != 1
-			|| (flush && !SyncFile(path))) {
-			return false;
+		} else if (!S_ISREG(info.st_mode) || info.st_nlink != 1) {
+			return Fail(error, staged
+				? "The staged macOS bundle contains an unsupported file type."
+				: "The installed macOS bundle contains an unsupported file type.");
+		} else if (staged && !SyncFile(path)) {
+			return Fail(error, "Could not sync a staged macOS bundle file.");
 		}
 	}
-	if (flush) {
+	if (staged) {
 		for (auto i = directories.crbegin(); i != directories.crend(); ++i) {
 			if (!SyncDirectory(*i)) {
-				return false;
+				return Fail(error, "Could not sync a staged macOS bundle directory.");
 			}
 		}
 	}
@@ -846,9 +855,15 @@ HelperDirectoryCleanup::~HelperDirectoryCleanup() {
 			QStringLiteral("-R=identifier \"com.sleepygram.desktop\""),
 			bundle,
 		});
-	return codesign.waitForFinished(30000)
-		&& codesign.exitStatus() == QProcess::NormalExit
-		&& codesign.exitCode() == 0;
+	if (!codesign.waitForFinished(30000)) {
+		return Fail(error, "macOS codesign could not finish bundle verification.");
+	}
+	if (codesign.exitStatus() != QProcess::NormalExit || codesign.exitCode() != 0) {
+		return Fail(error, staged
+			? "macOS codesign rejected the staged bundle."
+			: "macOS codesign rejected the installed bundle.");
+	}
+	return true;
 }
 
 [[nodiscard]] bool BundleIdentity(const QString &path, quint64 &device, quint64 &inode) {
@@ -874,30 +889,35 @@ HelperDirectoryCleanup::~HelperDirectoryCleanup() {
 	const auto entries = QDir(location.stage).entryList(
 		QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System);
 	const auto staged = StagedBundle(location);
-	if (entries != QStringList{ QStringView(kBundleName).toString() }
-		|| !CheckBundle(staged, true)
-		|| !CheckBundle(location.bundle, false)
-		|| !BundleIdentity(location.bundle, journal.device, journal.inode)) {
-		return Fail(error, "The existing or staged bundle is unsupported or failed codesign validation.");
+	if (entries != QStringList{ QStringView(kBundleName).toString() }) {
+		return Fail(error, "The staged macOS update must contain one SleepyGram bundle.");
 	}
-	return SyncDirectory(location.stage);
+	if (!CheckBundle(staged, true, error) || !CheckBundle(location.bundle, false, error)) {
+		return false;
+	} else if (!BundleIdentity(location.bundle, journal.device, journal.inode)) {
+		return Fail(error, "Could not identify the installed macOS bundle.");
+	}
+	return SyncDirectory(location.stage)
+		|| Fail(error, "Could not sync the macOS update staging directory.");
 }
 
 [[nodiscard]] bool SwapBundle(const Location &location, QString &error) {
 	const auto staged = StagedBundle(location);
 	if (PathKind(staged) != Kind::Directory
-		|| PathKind(location.bundle) != Kind::Directory
-		|| renameatx_np(
+		|| PathKind(location.bundle) != Kind::Directory) {
+		return Fail(error, "Could not find both macOS bundles before exchanging them.");
+	}
+	if (renameatx_np(
 			AT_FDCWD,
 			QFile::encodeName(staged).constData(),
 			AT_FDCWD,
 			QFile::encodeName(location.bundle).constData(),
-			RENAME_SWAP) != 0
-		|| !SyncDirectory(location.stage)
-		|| !SyncDirectory(location.root)) {
-		return Fail(error, "Could not exchange the SleepyGram bundles on this volume.");
+			RENAME_SWAP) != 0) {
+		error = QStringLiteral("Could not exchange the macOS bundles (errno %1).").arg(errno);
+		return false;
 	}
-	return true;
+	return (SyncDirectory(location.stage) && SyncDirectory(location.root))
+		|| Fail(error, "Could not sync the exchanged macOS bundles.");
 }
 
 [[nodiscard]] bool Install(
@@ -1197,7 +1217,14 @@ HelperDirectoryCleanup::~HelperDirectoryCleanup() {
 			break;
 		}
 	}
-	return Fail(error, "The replacement app could not reach update readiness.");
+	if (probe.state() == QProcess::NotRunning) {
+		error = (probe.exitStatus() == QProcess::CrashExit)
+			? QStringLiteral("The replacement app crashed or was stopped before readiness.")
+			: QStringLiteral("The replacement app exited before readiness (status %1).")
+				.arg(probe.exitCode());
+		return false;
+	}
+	return Fail(error, "The replacement app timed out before readiness.");
 }
 
 [[nodiscard]] bool StopProbe(QProcess &probe, const Location &location) {
@@ -1228,14 +1255,18 @@ HelperDirectoryCleanup::~HelperDirectoryCleanup() {
 	probe.start();
 	const auto started = probe.waitForStarted(5000);
 	const auto pid = probe.processId();
-	if (!started
-		|| !pid
-		|| !WriteState(Join(location.transaction, u"probe-pid"), QByteArray::number(pid))
-		|| !ConfirmProbe(probe, location, error)) {
-		const auto stopped = StopProbe(probe, location);
-		return stopped
-			? Fail(error, "The replacement app failed its startup check.")
-			: Fail(error, "The replacement app could not be stopped after the startup check.");
+	if (!started) {
+		error = QStringLiteral("Could not start the replacement app (process error %1).")
+			.arg(int(probe.error()));
+	} else if (!pid
+		|| !WriteState(Join(location.transaction, u"probe-pid"), QByteArray::number(pid))) {
+		error = QStringLiteral("Could not record the replacement app process.");
+	}
+	if (!error.isEmpty() || !ConfirmProbe(probe, location, error)) {
+		if (!StopProbe(probe, location)) {
+			error += QStringLiteral(" The startup check process could not be stopped.");
+		}
+		return false;
 	}
 	if (!WriteState(Join(location.transaction, u"commit"), "commit")) {
 		const auto stopped = StopProbe(probe, location);
@@ -1446,7 +1477,11 @@ int RunSleepyUpdater(const QStringList &args, QString &error) {
 		error = QStringLiteral("Could not restart SleepyGram.");
 		return 1;
 	}
-	return (!apply || applied) ? 0 : 1;
+	if (apply && !applied) {
+		error += QStringLiteral(" Restarted the installed app without confirming this update.");
+		return 1;
+	}
+	return 0;
 }
 
 } // namespace Core::Updates

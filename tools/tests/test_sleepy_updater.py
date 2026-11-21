@@ -71,7 +71,10 @@ int ENTRY(int argc, arg_t **argv) {
     }
     if (!key || CMP(key, ARG("profile-test")) || !workdir) return 1;
     if (!probe) return !marker(workdir, ARG("relaunch"), 1);
-    if (!strcmp(GENERATION, "bad")) return 2;
+    if (!strcmp(GENERATION, "bad")) {
+        for (int i = 0; i != 10; ++i) WAIT();
+        return 2;
+    }
     if (!marker(probe, ARG("ready"), 1)) return 3;
     for (int i = 0; i != 500; ++i) {
         if (marker(probe, ARG("abort"), 0)) return 4;
@@ -307,7 +310,11 @@ def exercise(helper: Path, openssl: str, cc: str, packer: Path | None = None) ->
             finally:
                 if keep_zombie:
                     set_linux_subreaper(False)
-            assert result.returncode == exitcode, (scenario, result.stderr.decode())
+            diagnostic = result.stderr.decode(errors="replace")
+            assert result.returncode == exitcode, (scenario, diagnostic)
+            if scenario == "failed_probe":
+                assert "exited before readiness (status 2)" in diagnostic, diagnostic
+                assert "Restarted the installed app without confirming this update." in diagnostic, diagnostic
             assert wait_for(workdir / "relaunch") == expected, scenario
             assert profile_file.read_bytes() == b"profile" and neighbor.read_bytes() == b"neighbor"
             assert not transaction.exists(), scenario

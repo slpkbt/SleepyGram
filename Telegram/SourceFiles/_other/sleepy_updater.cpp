@@ -11,6 +11,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <cstdio>
 
+#ifdef Q_OS_MACOS
+#include <os/log.h>
+#endif // Q_OS_MACOS
+
 int main(int argc, char *argv[]) {
 	const auto app = QCoreApplication(argc, argv);
 	auto error = QString();
@@ -18,7 +22,14 @@ int main(int argc, char *argv[]) {
 		app.arguments().mid(1),
 		error);
 	if (!error.isEmpty()) {
-		fprintf(stderr, "SleepyGram update: %s\n", error.toUtf8().constData());
+		const auto bytes = error.toUtf8();
+		fprintf(stderr, "SleepyGram update: %s\n", bytes.constData());
+#ifdef Q_OS_MACOS
+		// Finder launches do not have a terminal to retain detached stderr.
+		// Only updater-owned diagnostic phrases and numeric status codes are reported.
+		const auto log = os_log_create("com.sleepygram.desktop", "update");
+		os_log_error(log, "%{public}s", bytes.constData());
+#endif // Q_OS_MACOS
 	}
 	return result;
 }

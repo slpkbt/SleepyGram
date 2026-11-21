@@ -43,6 +43,7 @@ inline constexpr std::string_view kScreenReaderModeDisabledKey
 	= "screen-reader-mode-disabled";
 inline constexpr std::string_view kCopyMonospaceOnClickKey
 	= "copy-monospace-on-click";
+inline constexpr auto kCopyMonospaceOnClickDefault = true;
 inline constexpr std::string_view kDisableLinkPreviewsByDefaultKey
 	= "disable-link-previews-by-default";
 inline constexpr std::string_view kShowCurrentAccountInComposeKey
