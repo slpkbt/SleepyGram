@@ -4424,8 +4424,9 @@ void HistoryWidget::updateAccountMarker() {
 			Core::kShowCurrentAccountInComposeKey,
 			true)
 		&& session().domain().accountsAuthedCount() >= 2;
-	if (_accountMarker->isHidden() == show) {
-		_accountMarker->setVisible(show);
+	const auto showAvatar = show && (!_sendAs || _sendAs->isHidden());
+	if (_accountMarker->isHidden() == showAvatar) {
+		_accountMarker->setVisible(showAvatar);
 	}
 	if (_accountBadge) {
 		if (show) {
@@ -4435,7 +4436,7 @@ void HistoryWidget::updateAccountMarker() {
 			_accountBadge->setVisible(show);
 		}
 	}
-	if (!show) {
+	if (!showAvatar) {
 		return;
 	}
 	const auto name = session().user()->name();
