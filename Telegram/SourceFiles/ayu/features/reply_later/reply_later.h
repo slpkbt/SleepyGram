@@ -58,7 +58,7 @@ void Initialize();
 [[nodiscard]] int CountDueEntries(not_null<Main::Session*> session);
 [[nodiscard]] int CountAllEntries(not_null<Main::Session*> session);
 
-void ScheduleItem(not_null<HistoryItem*> item, int64 dueAt);
+[[nodiscard]] bool ScheduleItem(not_null<HistoryItem*> item, int64 dueAt);
 void SnoozeEntry(
 	not_null<Main::Session*> session,
 	uint64 peerId,

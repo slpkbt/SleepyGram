@@ -95,6 +95,10 @@ jobs:
         run: |
           c++ -std=c++20 -Wall -Wextra -Werror -I Telegram/SourceFiles tools/tests/test_chat_pin_input.cpp -o "$RUNNER_TEMP/chat-pin-input"
           "$RUNNER_TEMP/chat-pin-input"
+      - name: Test reminder capacity
+        run: |
+          c++ -std=c++20 -Wall -Wextra -Werror -I Telegram/SourceFiles tools/tests/test_reply_later_capacity.cpp -o "$RUNNER_TEMP/reply-later-capacity"
+          "$RUNNER_TEMP/reply-later-capacity"
       - name: Test language key preflight
         run: python3 .github/ci/test_preflight_lang.py
       - name: Test build diagnostics

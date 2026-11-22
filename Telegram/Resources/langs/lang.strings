@@ -9696,6 +9696,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_reply_later_set" = "Remind";
 "lng_reply_later_remove" = "Remove reminder";
 "lng_reply_later_saved" = "Reminder saved";
+"lng_reply_later_limit_reached" = "Reminder list is full. Complete or remove one first.";
 "lng_reply_later_removed" = "Reminder removed";
 "lng_reply_later_empty" = "No messages scheduled to reply later.";
 "lng_reply_later_snooze_1h" = "Snooze +1h";

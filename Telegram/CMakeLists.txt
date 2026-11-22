@@ -281,6 +281,7 @@ set(ayugram_files
         ayu/features/chat_lock/chat_lock.h
         ayu/features/reply_later/reply_later.cpp
         ayu/features/reply_later/reply_later.h
+        ayu/features/reply_later/reply_later_capacity.h
         ayu/features/send_guard/send_guard.cpp
         ayu/features/send_guard/send_guard.h
         ayu/features/downloads/download_layout.cpp

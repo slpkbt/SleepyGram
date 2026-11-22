@@ -1311,10 +1311,12 @@ void AddReplyLaterAction(
 		.fillSubmenu = [=](not_null<Ui::PopupMenu*> submenu) {
 			const auto schedulePreset = [=](Ayu::ReplyLater::Preset preset) {
 				if (const auto fresh = session->data().message(peerId, msgId)) {
-					Ayu::ReplyLater::ScheduleItem(
+					const auto saved = Ayu::ReplyLater::ScheduleItem(
 						fresh,
 						Ayu::ReplyLater::ComputePresetTime(preset));
-					controller->showToast(tr::lng_reply_later_saved(tr::now));
+					controller->showToast(saved
+						? tr::lng_reply_later_saved(tr::now)
+						: tr::lng_reply_later_limit_reached(tr::now));
 				}
 			};
 			if (hasExisting) {

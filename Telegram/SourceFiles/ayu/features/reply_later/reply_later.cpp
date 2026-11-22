@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/features/reply_later/reply_later.h"
 
 #include "ayu/features/chat_lock/chat_lock.h"
+#include "ayu/features/reply_later/reply_later_capacity.h"
 #include "base/timer.h"
 #include "core/application.h"
 #include "data/data_forum_topic.h"
@@ -41,6 +42,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QTimer>
 
 #include <algorithm>
 
@@ -48,7 +50,6 @@ namespace Ayu::ReplyLater {
 namespace {
 
 constexpr auto kPrefKey = std::string_view("sleepygram.replyLater.v1");
-constexpr auto kMaxEntriesPerAccount = 250;
 constexpr auto kPollIntervalMs = crl::time(15 * 1000);
 
 rpl::event_stream<not_null<Main::Session*>> &ChangesStream() {
@@ -307,17 +308,16 @@ int CountAllEntries(not_null<Main::Session*> session) {
 	return int(LoadEntries(session).size());
 }
 
-void ScheduleItem(not_null<HistoryItem*> item, int64 dueAt) {
+bool ScheduleItem(not_null<HistoryItem*> item, int64 dueAt) {
 	const auto session = &item->history()->session();
 	const auto peer = item->history()->peer;
 	auto entries = LoadEntries(session);
-	entries.erase(
-		std::remove_if(entries.begin(), entries.end(), [&](const Entry &e) {
-			return e.matches(peer->id.value, item->id.bare);
-		}),
-		entries.end());
-	if (entries.size() >= kMaxEntriesPerAccount) {
-		entries.erase(entries.begin());
+	const auto existing = std::find_if(
+		entries.begin(),
+		entries.end(),
+		[&](const Entry &e) { return e.matches(peer->id.value, item->id.bare); });
+	if (!CanScheduleReminder(entries.size(), existing != entries.end())) {
+		return false;
 	}
 	auto entry = Entry();
 	entry.peerId = peer->id.value;
@@ -334,8 +334,13 @@ void ScheduleItem(not_null<HistoryItem*> item, int64 dueAt) {
 			entry.peerName += u" / "_q + topic->title();
 		}
 	}
-	entries.push_back(std::move(entry));
+	if (existing == entries.end()) {
+		entries.push_back(std::move(entry));
+	} else {
+		*existing = std::move(entry);
+	}
 	SaveEntries(session, entries);
+	return true;
 }
 
 void SnoozeEntry(
@@ -414,8 +419,10 @@ void ShowCustomTimeBox(
 			.submit = tr::lng_reply_later_set(),
 			.done = [=](TimeId result) {
 				if (const auto fresh = session->data().message(peerId, msgId)) {
-					ScheduleItem(fresh, int64(result));
-					controller->showToast(tr::lng_reply_later_saved(tr::now));
+					const auto saved = ScheduleItem(fresh, int64(result));
+					controller->showToast(saved
+						? tr::lng_reply_later_saved(tr::now)
+						: tr::lng_reply_later_limit_reached(tr::now));
 				}
 				box->closeBox();
 			},
@@ -469,8 +476,12 @@ void ShowListBox(not_null<Window::SessionController*> controller) {
 						rpl::single(title + u" · "_q + timeText),
 						st::settingsButtonNoIcon));
 				row->setClickedCallback([=] {
+					const auto target = entry;
+					const auto weakController = base::make_weak(controller);
 					box->closeBox();
-					OpenEntry(controller, entry);
+					if (const auto strong = weakController.get()) {
+						OpenEntry(strong, target);
+					}
 				});
 
 				if (!snippet.isEmpty()) {
@@ -529,7 +540,7 @@ void ShowListBox(not_null<Window::SessionController*> controller) {
 			}) | rpl::to_empty,
 			Ayu::ChatLock::Changes() | rpl::to_empty
 		) | rpl::on_next([=] {
-			rebuild();
+			QTimer::singleShot(0, content, rebuild);
 		}, box->lifetime());
 	}));
 }
