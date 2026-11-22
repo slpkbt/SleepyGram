@@ -23,6 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QLockFile>
 #include <QtCore/QProcess>
 #include <QtCore/QSaveFile>
+#include <QtCore/QTemporaryDir>
 #include <QtCore/QThread>
 #include <QtCore/QUuid>
 
@@ -1312,6 +1313,55 @@ HelperDirectoryCleanup::~HelperDirectoryCleanup() {
 }
 
 } // namespace
+
+#ifdef Q_OS_MACOS
+MacUpdatePreflight PreflightMacUpdate(const VerifiedUpdate &update, QString &error) {
+	const auto temp = QTemporaryDir();
+	if (!temp.isValid()) {
+		error = QStringLiteral("Could not create a private macOS update preflight directory.");
+		return MacUpdatePreflight::Failed;
+	}
+	{
+		const auto files = DecompressUpdatePayload(update, &error);
+		if (!files || !ExtractUpdateFiles(
+				*files,
+				update.envelope.version,
+				temp.path(),
+				&error)) {
+			return MacUpdatePreflight::Failed;
+		}
+	}
+	const auto bundle = Join(temp.path(), kBundleName);
+	auto assessment = QProcess();
+	assessment.setStandardOutputFile(QProcess::nullDevice());
+	assessment.setStandardErrorFile(QProcess::nullDevice());
+	if (QFileInfo(QStringLiteral("/usr/bin/syspolicy_check")).isExecutable()) {
+		assessment.start(
+			QStringLiteral("/usr/bin/syspolicy_check"),
+			{ QStringLiteral("distribution"), bundle });
+	} else {
+		assessment.start(
+			QStringLiteral("/usr/sbin/spctl"),
+			{ QStringLiteral("--assess"), QStringLiteral("--type"),
+				QStringLiteral("execute"), bundle });
+	}
+	if (!assessment.waitForStarted(3000) || !assessment.waitForFinished(30000)
+		|| assessment.exitStatus() != QProcess::NormalExit) {
+		if (assessment.state() != QProcess::NotRunning) {
+			assessment.kill();
+			assessment.waitForFinished(1000);
+		}
+		error = QStringLiteral("Could not complete the macOS update policy check.");
+		return MacUpdatePreflight::Failed;
+	}
+	if (assessment.exitCode() != 0) {
+		error = QStringLiteral("macOS did not accept the staged update (status %1).")
+			.arg(assessment.exitCode());
+		return MacUpdatePreflight::PolicyDenied;
+	}
+	return MacUpdatePreflight::Allowed;
+}
+#endif // Q_OS_MACOS
 
 QString SleepyUpdateTransactionPath(const QString &executable) {
 	const auto location = GetLocation(executable);
