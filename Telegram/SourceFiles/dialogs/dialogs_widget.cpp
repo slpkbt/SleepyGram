@@ -935,7 +935,8 @@ void Widget::chosenRow(const ChosenRow &row) {
 	}();
 
 	if (topicJump) {
-		if (controller()->shownForum().current() == topicJump->forum()) {
+		if (!row.newWindow
+			&& controller()->shownForum().current() == topicJump->forum()) {
 			controller()->closeForum();
 		} else if (row.newWindow) {
 			controller()->showInNewWindow(Window::SeparateId(topicJump));
@@ -1010,7 +1011,7 @@ void Widget::chosenRow(const ChosenRow &row) {
 			|| !history->peer->viewForumAsMessages()
 			|| history->peer->useSubsectionTabs())) {
 		const auto forum = history->peer->forum();
-		if (controller()->shownForum().current() == forum) {
+		if (!row.newWindow && controller()->shownForum().current() == forum) {
 			controller()->closeForum();
 		} else if (row.newWindow) {
 			const auto type = forum->peer()->useSubsectionTabs()

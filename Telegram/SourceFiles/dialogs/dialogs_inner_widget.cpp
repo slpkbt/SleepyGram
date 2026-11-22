@@ -135,6 +135,10 @@ constexpr auto kStartDragToFilterThresholdY = 75;
 constexpr auto kQueryPreviewLimit = 32;
 constexpr auto kPreviewPostsLimit = 3;
 
+[[nodiscard]] bool IsMacNewWindowClick(Qt::KeyboardModifiers modifiers) {
+	return Platform::IsMac() && modifiers.testFlag(Qt::AltModifier);
+}
+
 [[nodiscard]] uint64 RowsCacheKey(Entry *entry) {
 	return uint64(reinterpret_cast<quintptr>(entry));
 }
@@ -2721,7 +2725,9 @@ void InnerWidget::mousePressEvent(QMouseEvent *e) {
 	_pressedChatTypeFilter = _selectedChatTypeFilter;
 
 	const auto alt = (e->modifiers() & Qt::AltModifier);
-	if (alt && showChatPreview()) {
+	const auto newWindowClick = (e->button() == Qt::LeftButton)
+		&& IsMacNewWindowClick(e->modifiers());
+	if (alt && !newWindowClick && showChatPreview()) {
 		return;
 	} else if (!alt && isUserpicPress()) {
 		scheduleChatPreview(e->globalPos());
@@ -3302,8 +3308,10 @@ void InnerWidget::mousePressReleased(
 		const auto index = (releasedAt.y() - searchedOffset()) / _st->height;
 		return base::in_range(index, 0, _searchResults.size()) ? index : -1;
 	}();
+	const auto newWindowClick = IsMacNewWindowClick(modifiers);
 	auto searchMessageSelectionToggled = false;
-	if (!wasDragging
+	if (!newWindowClick
+		&& !wasDragging
 		&& button == Qt::LeftButton
 		&& pressedSearchMessageId
 		&& base::in_range(searchedPressed, 0, _searchResults.size())
@@ -3349,7 +3357,8 @@ void InnerWidget::mousePressReleased(
 		}
 	}
 	auto dialogMultiSelectionHandled = false;
-	if (!searchMessageSelectionToggled
+	if (!newWindowClick
+		&& !searchMessageSelectionToggled
 		&& !wasDragging
 		&& button == Qt::LeftButton
 		&& _state == WidgetState::Default
@@ -6591,10 +6600,13 @@ bool InnerWidget::chooseRow(
 	const auto modifyChosenRow = [&](
 			ChosenRow row,
 			Qt::KeyboardModifiers modifiers) {
-		row.newWindow = modifiers.testFlag(Qt::ControlModifier)
-			&& modifiers.testFlag(Qt::AltModifier);
-		row.userpicClick = isUserpicPressOnWide();
-		row.communityBadgeClick = isCommunityBadgePressOnNarrow();
+		const auto macNewWindow = IsMacNewWindowClick(modifiers);
+		row.newWindow = macNewWindow
+			|| (modifiers.testFlag(Qt::ControlModifier)
+				&& modifiers.testFlag(Qt::AltModifier));
+		row.userpicClick = !macNewWindow && isUserpicPressOnWide();
+		row.communityBadgeClick = !macNewWindow
+			&& isCommunityBadgePressOnNarrow();
 		return row;
 	};
 	auto chosen = modifyChosenRow(computeChosenRow(), modifiers);
