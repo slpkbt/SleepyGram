@@ -442,7 +442,12 @@ if (NOT DESKTOP_APP_DISABLE_SWIFT6)
     telegram_add_apple_swift_runtime(Telegram)
 endif()
 
-target_precompile_headers(Telegram PRIVATE $<$<COMPILE_LANGUAGE:CXX,OBJCXX>:${src_loc}/stdafx.h>)
+option(SLEEPYGRAM_CI_CCACHE "Compile the Linux client with ccache and a textual prefix header" OFF)
+if (SLEEPYGRAM_CI_CCACHE AND LINUX)
+    target_compile_options(Telegram PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include ${src_loc}/stdafx.h>")
+else()
+    target_precompile_headers(Telegram PRIVATE $<$<COMPILE_LANGUAGE:CXX,OBJCXX>:${src_loc}/stdafx.h>)
+endif()
 nice_target_sources(Telegram ${src_loc}
 PRIVATE
     ${style_files}

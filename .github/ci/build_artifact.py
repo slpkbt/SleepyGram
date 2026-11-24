@@ -30,7 +30,8 @@ OPTIONAL_UNINITIALIZED_SUBMODULES = {
 }
 
 
-def command_output(command: list[str], cwd: Path | None = None) -> str | None:
+def command_output(command: list[str], cwd: Path | None = None, *,
+                   return_codes: tuple[int, ...] = (0, 1)) -> str | None:
     try:
         result = subprocess.run(
             command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -38,7 +39,7 @@ def command_output(command: list[str], cwd: Path | None = None) -> str | None:
         )
     except (FileNotFoundError, OSError):
         return None
-    if result.returncode not in (0, 1):
+    if result.returncode not in return_codes:
         return None
     return result.stdout.strip() or None
 
@@ -209,7 +210,7 @@ def create_manifest(args: argparse.Namespace) -> None:
     cache = cmake_values(repo_root, build_dir)
     detected_qt, qt_source = qt_version(cache, args.qt_version)
     if args.platform == "windows-x64":
-        compiler = command_output(["cl", "/Bv"])
+        compiler = command_output(["cl", "/Bv"], return_codes=(0, 1, 2))
     elif args.platform == "linux-x64":
         compiler = os.environ.get("CI_CONTAINER_CXX")
     else:
@@ -433,9 +434,20 @@ def cache_key(args: argparse.Namespace) -> None:
         digest.update(submodule_tree_fingerprint(repo_root).encode())
     tool_versions = ["cmake --version", "ninja --version"]
     if args.platform == "macos-arm64":
-        tool_versions += ["clang++ --version", "xcodebuild -version", "xcrun --show-sdk-version"]
+        digest.update(os.environ.get("CI_MACOS_MINIMUM", "").encode())
+        tool_versions += [
+            "xcrun --sdk macosx clang++ --version",
+            "xcodebuild -version",
+            "xcrun --sdk macosx --show-sdk-version",
+            "xcrun --sdk macosx --show-sdk-build-version",
+        ]
     elif args.platform == "windows-x64":
-        tool_versions += ["cl /Bv", "where cmake"]
+        compiler = command_output(["cl", "/Bv"], repo_root, return_codes=(0, 1, 2))
+        if not compiler or not re.search(r"\b\d+\.\d+\.\d+", compiler):
+            raise RuntimeError("Could not identify the MSVC version for the dependency cache.")
+        digest.update(compiler.encode())
+        digest.update(os.environ.get("VCToolsVersion", "").encode())
+        tool_versions += ["where cmake"]
     else:
         tool_versions += ["docker version --format {{.Server.Version}}"]
     for command in tool_versions:
