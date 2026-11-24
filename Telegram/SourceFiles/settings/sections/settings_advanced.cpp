@@ -1117,6 +1117,11 @@ void SetDefaultStatus(
 	using State = Core::UpdateChecker::State;
 	const auto state = checker.state();
 	switch (state) {
+	case State::MacUpdateBlocked:
+		update->hide();
+		texts->fire(tr::lng_sleepy_update_mac_blocked(tr::now));
+		downloading->fire(false);
+		break;
 	case State::Available:
 #ifdef SLEEPYGRAM_RELEASE_UPDATE
 		if (!checker.hasPackage() || !Core::CanInstallSleepyUpdate()) {
@@ -1189,6 +1194,12 @@ void SubscribeToUpdateChecker(
 		update->hide();
 		options->setAttribute(Qt::WA_TransparentForMouseEvents, false);
 		texts->fire(tr::lng_sleepy_update_busy(tr::now));
+		downloading->fire(false);
+	}, options->lifetime());
+	checker.macUpdateBlocked() | rpl::on_next([=] {
+		update->hide();
+		options->setAttribute(Qt::WA_TransparentForMouseEvents, false);
+		texts->fire(tr::lng_sleepy_update_mac_blocked(tr::now));
 		downloading->fire(false);
 	}, options->lifetime());
 	checker.failed() | rpl::on_next([=] {

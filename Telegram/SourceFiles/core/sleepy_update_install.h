@@ -12,6 +12,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Core::Updates {
 
+#ifdef Q_OS_MACOS
+struct VerifiedUpdate;
+
+enum class MacUpdatePreflight {
+	Allowed,
+	PolicyDenied,
+	Failed,
+};
+
+[[nodiscard]] MacUpdatePreflight PreflightMacUpdate(
+	const VerifiedUpdate &update,
+	QString &error);
+#endif // Q_OS_MACOS
+
 [[nodiscard]] QString SleepyUpdateTransactionPath(const QString &executable);
 
 [[nodiscard]] bool SleepyUpdateInstallationSupported(

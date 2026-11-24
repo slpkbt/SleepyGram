@@ -9686,6 +9686,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_sleepy_download_update" = "Download update";
 "lng_sleepy_update_to" = "Update to {version}";
 "lng_sleepy_update_busy" = "Finish the current call or account operation and try again";
+"lng_sleepy_update_mac_blocked" = "macOS blocked the update. SleepyGram was not restarted.";
 "lng_sleepy_update_manual" = "Download the update from SleepyGram Releases";
 
 "lng_context_reply_later" = "Reply later";

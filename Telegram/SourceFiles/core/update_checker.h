@@ -27,6 +27,7 @@ public:
 		Available,
 		Download,
 		Ready,
+		MacUpdateBlocked,
 	};
 	using Progress = MTP::AbstractDedicatedLoader::Progress;
 
@@ -39,6 +40,7 @@ public:
 	rpl::producer<> ready() const;
 	rpl::producer<> available() const;
 	rpl::producer<> busy() const;
+	rpl::producer<> macUpdateBlocked() const;
 
 	void start(bool forceWait = false);
 	void stop();
