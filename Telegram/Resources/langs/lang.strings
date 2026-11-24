@@ -6025,6 +6025,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_sr_chat_column_folders" = "Folders";
 
 "lng_sr_message_list" = "Messages";
+"lng_sr_position" = "{index} of {total}";
 "lng_sr_from_me" = "Me";
 "lng_sr_message_seen" = "Seen";
 "lng_sr_message_not_seen" = "Not seen";
