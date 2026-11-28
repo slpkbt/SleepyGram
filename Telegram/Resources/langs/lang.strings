@@ -9632,6 +9632,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "ayu_SearchTypeFiles" = "Files";
 "ayu_ForwardSelectedSearchMessages" = "Forward Selected Messages";
 "ayu_ClearSearchMessageSelection" = "Clear Selection";
+"ayu_SelectLoadedSearchMessages" = "Select Loaded Forwardable Results ({total})";
+"ayu_ForwardSelectedSearchMessagesCount" = "Forward Selected Messages ({total})";
 "ayu_ContextCopyCallbackData" = "Copy Callback Data";
 "ayu_RepeatMessage" = "Repeat Message";
 "ayu_RegisterURLScheme" = "Register URL Scheme";
@@ -9686,6 +9688,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_sleepy_download_update" = "Download update";
 "lng_sleepy_update_to" = "Update to {version}";
 "lng_sleepy_update_busy" = "Finish the current call or account operation and try again";
+"lng_sleepy_update_mac_blocked" = "macOS blocked the update. SleepyGram is still running. You can download a new copy from GitHub Releases.";
 "lng_sleepy_update_manual" = "Download the update from SleepyGram Releases";
 
 "lng_context_reply_later" = "Reply later";

@@ -484,6 +484,10 @@ private:
 		QRect updateRect = QRect(),
 		UpdateRowSections sections = UpdateRowSection::All);
 	void fillSupportSearchMenu(not_null<Ui::PopupMenu*> menu);
+	[[nodiscard]] bool canBulkSelectSearchResults() const;
+	void addSelectLoadedSearchResults(
+		not_null<Ui::PopupMenu*> menu,
+		FullMsgId clickedId);
 	void fillSearchResultMenu(
 		not_null<Ui::PopupMenu*> menu,
 		FullMsgId itemId);

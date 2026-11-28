@@ -27,6 +27,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history.h"
 #include "history/history_item.h"
 #include "history/history_item_helpers.h"
+#include "config.h"
 #include "core/application.h"
 #include "core/click_handler_types.h"
 #include "core/file_utilities.h"
@@ -4285,9 +4286,78 @@ void InnerWidget::fillSupportSearchMenu(not_null<Ui::PopupMenu*> menu) {
 	});
 }
 
+bool InnerWidget::canBulkSelectSearchResults() const {
+	return _state == WidgetState::Filtered
+		&& !_searchWaiting
+		&& _searchState.inChat
+		&& (_searchState.tab == ChatSearchTab::ThisPeer
+			|| _searchState.tab == ChatSearchTab::ThisTopic);
+}
+
+void InnerWidget::addSelectLoadedSearchResults(
+		not_null<Ui::PopupMenu*> menu,
+		FullMsgId clickedId) {
+	if (!canBulkSelectSearchResults()
+		|| !ranges::any_of(_searchResults, [&](const auto &row) {
+			return row->item()->fullId() == clickedId;
+		})) {
+		return;
+	}
+
+	auto ids = _selectedSearchMessages;
+	for (const auto &row : _searchResults) {
+		if (ids.size() >= MaxSelectedItems) {
+			break;
+		}
+		const auto item = row->item();
+		if (item->isRegular() && item->allowsForward()) {
+			ids.emplace(item->fullId());
+		}
+	}
+	if (ids.size() == _selectedSearchMessages.size()) {
+		return;
+	}
+
+	const auto text = tr::ayu_SelectLoadedSearchMessages(
+		tr::now,
+		lt_total,
+		QString::number(int(ids.size())));
+	menu->addAction(text, [
+		weak = base::make_weak(this),
+		state = _searchState,
+		previous = _selectedSearchMessages,
+		ids = std::move(ids)
+	] {
+		if (!weak
+			|| !weak->canBulkSelectSearchResults()
+			|| weak->_searchState != state
+			|| !ranges::equal(weak->_selectedSearchMessages, previous)) {
+			return;
+		}
+		auto selected = previous;
+		const auto &owner = weak->session().data();
+		for (const auto &id : ids) {
+			const auto item = owner.message(id);
+			if (item && item->isRegular() && item->allowsForward()) {
+				selected.emplace(id);
+			}
+		}
+		if (selected.size() == previous.size()) {
+			return;
+		}
+		weak->_selectedSearchMessages = std::move(selected);
+		weak->_selectedSearchMessageChanges.fire_copy(
+			weak->selectedSearchMessageIds());
+		if (weak) {
+			weak->refresh();
+		}
+	});
+}
+
 void InnerWidget::fillSearchResultMenu(
 		not_null<Ui::PopupMenu*> menu,
 		FullMsgId itemId) {
+	addSelectLoadedSearchResults(menu, itemId);
 	const auto owner = &session().data();
 	if (!_selectedSearchMessages.empty()) {
 		auto ids = selectedSearchMessageIds();
@@ -4312,8 +4382,12 @@ void InnerWidget::fillSearchResultMenu(
 				return item && item->allowsForward();
 			});
 			if (forwardable) {
+				const auto label = tr::ayu_ForwardSelectedSearchMessagesCount(
+					tr::now,
+					lt_total,
+					QString::number(int(ids.size())));
 				menu->addAction(
-					tr::ayu_ForwardSelectedSearchMessages(tr::now),
+					label,
 					[weak, controller = _controller, ids = std::move(ids)]() mutable {
 						if (!weak
 							|| weak->selectedSearchMessageIds() != ids) {
@@ -4498,14 +4572,17 @@ void InnerWidget::contextMenuEvent(QContextMenuEvent *e) {
 		this,
 		(!row.fullId
 			? st::popupMenuExpandedSeparator
-			: ((_searchResultsOnlyTitle || !_selectedSearchMessages.empty())
+			: ((_searchResultsOnlyTitle || canBulkSelectSearchResults()
+				|| !_selectedSearchMessages.empty())
 				&& !session().supportMode())
 			? st::popupMenuWithIcons
 			: st::defaultPopupMenu));
 	if (row.fullId) {
 		if (session().supportMode()) {
 			fillSupportSearchMenu(_menu.get());
-		} else if (_searchResultsOnlyTitle || !_selectedSearchMessages.empty()) {
+		} else if (_searchResultsOnlyTitle
+			|| canBulkSelectSearchResults()
+			|| !_selectedSearchMessages.empty()) {
 			fillSearchResultMenu(_menu.get(), row.fullId);
 		}
 	} else if (_state == WidgetState::Default
@@ -4744,14 +4821,7 @@ void InnerWidget::applySearchState(SearchState state) {
 	if (_searchState == state) {
 		return;
 	}
-	const auto selectionIdentityChanged = (state.query != _searchState.query)
-		|| (state.fromPeer != _searchState.fromPeer)
-		|| (state.mediaFilter != _searchState.mediaFilter)
-		|| (state.inChat != _searchState.inChat)
-		|| (state.tab != _searchState.tab);
-	if (selectionIdentityChanged) {
-		clearSearchMessageSelection();
-	}
+	clearSearchMessageSelection();
 	auto withSameQuery = state;
 	withSameQuery.query = _searchState.query;
 	const auto otherChanged = (_searchState != withSameQuery);
@@ -5146,13 +5216,15 @@ void InnerWidget::clearSearchMessageSelection() {
 }
 
 void InnerWidget::toggleSearchMessageSelection(FullMsgId itemId) {
-	if (!session().data().message(itemId)) {
+	if (_searchWaiting || !session().data().message(itemId)) {
 		return;
 	}
 	if (_selectedSearchMessages.contains(itemId)) {
 		_selectedSearchMessages.erase(itemId);
-	} else {
+	} else if (_selectedSearchMessages.size() < MaxSelectedItems) {
 		_selectedSearchMessages.emplace(itemId);
+	} else {
+		return;
 	}
 	_selectedSearchMessageChanges.fire_copy(selectedSearchMessageIds());
 	refresh();

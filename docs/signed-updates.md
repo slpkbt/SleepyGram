@@ -95,3 +95,22 @@ If package verification, signing, or draft upload fails, the previous release st
 An interrupted upload can leave an unpublished draft. Inspect that draft before
 retrying. The workflow refuses to reuse its tag until the incomplete draft has
 been removed, and it always refuses to overwrite a published release.
+
+## macOS distribution policy
+
+SleepyGram's TDUP signature authenticates update bytes but is not a substitute
+for Apple's Developer ID signature or notarization. macOS builds that include
+the preflight assess the verified replacement bundle before requesting a
+restart. A rejection leaves the running application in place and shows an
+explanation in Version and Updates next to the link to SleepyGram Releases.
+That link does not override macOS policy and the manual package may be subject
+to the same policy. Older installed builds do not have this preflight.
+
+For production macOS auto-updates, sign the nested code and the final app with
+Developer ID Application and the required hardened runtime and entitlements,
+submit it to Apple's notary service, and test the exact app reconstructed
+from the signed TDUP. Assess that reconstructed app on a clean Mac, including
+offline and in a normal Finder-launched upgrade. The current TDUP comparison
+checks file bytes and executable bits, not AppleDouble metadata or extended
+attributes; a passing DMG check alone is not sufficient.
+[Apple notarization guide](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
