@@ -63,7 +63,7 @@ AyuGram brought some of the best privacy and message-preservation features to Te
   <tr>
     <td width="50%" valign="top">
       <h3>⚡ Power-User Limits Unlocked</h3>
-      <p>Select and forward up to <strong>10,000 messages</strong> in one action — automatically dispatched in safe 100-message API batches without silent drops or client freezes.</p>
+      <p>Select and forward up to <strong>10,000 messages</strong> in one action — standard forwards are sent in API batches of up to 100.</p>
     </td>
     <td width="50%" valign="top">
       <h3>🎨 Clean UX & Customization</h3>
@@ -77,7 +77,7 @@ AyuGram brought some of the best privacy and message-preservation features to Te
     </td>
     <td width="50%" valign="top">
       <h3>🗂️ Folders, Bulk Ops & Smart Export</h3>
-      <p>Virtual <strong>Mentions</strong> folder, per-folder sorting & badge controls, multi-select bulk chat actions, incremental chat/topic export, topic/type download sorting, and multi-monitor auto-DPI.</p>
+      <p>Virtual <strong>Mentions</strong> folder, per-folder sorting & badge controls, multi-select bulk chat actions, offline chat/topic export (updating an existing archive is temporarily disabled), topic/type download sorting, and multi-monitor auto-DPI.</p>
     </td>
   </tr>
 </table>

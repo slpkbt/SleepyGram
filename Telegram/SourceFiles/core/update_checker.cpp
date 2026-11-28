@@ -39,6 +39,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #ifdef SLEEPYGRAM_RELEASE_UPDATE
 #include "core/update_github.h"
 #include "core/sleepy_update.h"
+#include "core/sleepy_update_install.h"
 #endif // SLEEPYGRAM_RELEASE_UPDATE
 
 #include <QtCore/QJsonDocument>
@@ -1639,6 +1640,7 @@ public:
 	rpl::producer<> ready() const;
 	rpl::producer<> available() const;
 	rpl::producer<> busy() const;
+	rpl::producer<> macUpdateBlocked() const;
 
 	void start(bool forceWait);
 	void checkNow();
@@ -1678,6 +1680,7 @@ private:
 	void finalize(QString filepath);
 	void unpackDone(bool ready);
 	void unpackBusy();
+	void unpackMacUpdateBlocked();
 	void handleChecking();
 	void handleProgress();
 	void handleLatest();
@@ -1696,6 +1699,8 @@ private:
 	rpl::event_stream<> _ready;
 	rpl::event_stream<> _available;
 	rpl::event_stream<> _busy;
+	rpl::event_stream<> _macUpdateBlocked;
+	bool _macPolicyDenied = false;
 	bool _manual = false;
 	int _failures = 0;
 	uint64 _generation = 0;
@@ -1757,6 +1762,10 @@ rpl::producer<> Updater::available() const {
 
 rpl::producer<> Updater::busy() const {
 	return _busy.events();
+}
+
+rpl::producer<> Updater::macUpdateBlocked() const {
+	return _macUpdateBlocked.events();
 }
 
 void Updater::checkNow() {
@@ -1826,6 +1835,7 @@ void Updater::handleLatest() {
 }
 
 void Updater::handleChecking() {
+	_macPolicyDenied = false;
 	_action = Action::Checking;
 	_retryTimer.callOnce(kUpdaterTimeout);
 }
@@ -1851,7 +1861,7 @@ auto Updater::state() const -> State {
 	} else if (_action == Action::Loading) {
 		return State::Download;
 	}
-	return State::None;
+	return _macPolicyDenied ? State::MacUpdateBlocked : State::None;
 }
 
 int Updater::size() const {
@@ -1867,6 +1877,7 @@ bool Updater::percent() const {
 }
 
 void Updater::stop() {
+	_macPolicyDenied = false;
 	++_generation;
 	_httpImplementation = Implementation();
 	_mtpImplementation = Implementation();
@@ -2116,15 +2127,30 @@ void Updater::finalize(QString filepath) {
 				RunningUpdateVersion(), held, Updates::RootPublicKeyPem(),
 				base::unixtime::now(), &error)
 			: std::nullopt;
-		const auto ready = verified
+		auto ready = verified
 			&& verified->envelope.channel == Updates::Channel::Stable
 			&& verified->envelope.version == Updates::MakeUpdateVersion(expected, 0);
+#ifdef Q_OS_MACOS
+		const auto preflight = ready
+			? Updates::PreflightMacUpdate(*verified, error)
+			: Updates::MacUpdatePreflight::Failed;
+		if (ready && preflight != Updates::MacUpdatePreflight::Allowed) {
+			LOG(("Update Error: %1").arg(error));
+			ready = false;
+		}
+#endif // Q_OS_MACOS
 		crl::on_main([=] {
 			const auto updater = weak.get();
 			if (!updater || updater->_generation != generation
 				|| updater->_action != Action::Unpacking) {
 				return;
 			}
+#ifdef Q_OS_MACOS
+			if (preflight == Updates::MacUpdatePreflight::PolicyDenied) {
+				updater->unpackMacUpdateBlocked();
+				return;
+			}
+#endif // Q_OS_MACOS
 			if (ready && IsSleepyUpdateBusy()) {
 				updater->unpackBusy();
 				return;
@@ -2149,6 +2175,12 @@ void Updater::finalize(QString filepath) {
 void Updater::unpackBusy() {
 	scheduleNext();
 	_busy.fire({});
+}
+
+void Updater::unpackMacUpdateBlocked() {
+	scheduleNext();
+	_macPolicyDenied = true;
+	_macUpdateBlocked.fire({});
 }
 
 void Updater::unpackDone(bool ready) {
@@ -2202,6 +2234,10 @@ rpl::producer<> UpdateChecker::available() const {
 
 rpl::producer<> UpdateChecker::busy() const {
 	return _updater->busy();
+}
+
+rpl::producer<> UpdateChecker::macUpdateBlocked() const {
+	return _updater->macUpdateBlocked();
 }
 
 void UpdateChecker::checkNow() {
